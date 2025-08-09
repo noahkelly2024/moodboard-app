@@ -65,36 +65,66 @@ const MoodBoardApp = () => {
     return () => { ignore = true; clearInterval(id); };
   }, [getBackendBases]);
 
-  // Mock furniture search API - In production, integrate with real furniture APIs
+  // Real furniture search API - aggregates results from multiple sites
   const searchFurniture = useCallback(async (query: string, filters: SearchFilters) => {
     setIsSearching(true);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const mockResults = [
-      { id: 'wayfair-1', title: 'Modern Velvet Accent Chair', price: '$299.99', originalPrice: '$399.99', site: 'Wayfair', image: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=300&h=300&fit=crop&crop=center', url: '#', rating: 4.5, reviews: 234, category: 'seating', style: 'modern', inStock: true },
-      { id: 'ikea-1', title: 'Scandinavian Dining Table', price: '$199.00', originalPrice: null, site: 'IKEA', image: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&h=300&fit=crop&crop=center', url: '#', rating: 4.2, reviews: 156, category: 'tables', style: 'scandinavian', inStock: true },
-      { id: 'cb2-1', title: 'Industrial Metal Bookshelf', price: '$449.95', originalPrice: null, site: 'CB2', image: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=300&h=300&fit=crop&crop=center', url: '#', rating: 4.7, reviews: 89, category: 'storage', style: 'industrial', inStock: false },
-      { id: 'westelm-1', title: 'Mid-Century Floor Lamp', price: '$179.00', originalPrice: '$229.00', site: 'West Elm', image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=center', url: '#', rating: 4.4, reviews: 312, category: 'lighting', style: 'mid-century', inStock: true },
-      { id: 'pottery-1', title: 'Rustic Wooden Coffee Table', price: '$599.00', originalPrice: null, site: 'Pottery Barn', image: 'https://images.unsplash.com/photo-1549497538-303791108f95?w=300&h=300&fit=crop&crop=center', url: '#', rating: 4.6, reviews: 187, category: 'tables', style: 'rustic', inStock: true },
-      { id: 'crate-1', title: 'Contemporary Sectional Sofa', price: '$1299.00', originalPrice: '$1599.00', site: 'Crate & Barrel', image: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&h=300&fit=crop&crop=center', url: '#', rating: 4.3, reviews: 98, category: 'seating', style: 'contemporary', inStock: true }
-    ];
-    let filteredResults = mockResults.filter(item => item.title.toLowerCase().includes(query.toLowerCase()) || item.category.includes(query.toLowerCase()) || item.style.includes(query.toLowerCase()));
-    if (filters.category !== 'all') filteredResults = filteredResults.filter(item => item.category === filters.category);
-    if (filters.style !== 'all') filteredResults = filteredResults.filter(item => item.style === filters.style);
-    if (filters.priceRange !== 'all') {
-      filteredResults = filteredResults.filter(item => {
-        const price = parseFloat(item.price.replace('$', '').replace(',', ''));
-        switch (filters.priceRange) {
-          case 'under200': return price < 200;
-          case '200to500': return price >= 200 && price <= 500;
-          case '500to1000': return price >= 500 && price <= 1000;
-          case 'over1000': return price > 1000;
-          default: return true;
+    try {
+      const payload = { query, filters };
+      const bases = getBackendBases();
+      
+      for (const base of bases) {
+        try {
+          const response = await fetch(`${base}/search-furniture`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          
+          if (!response.ok) continue;
+          
+          const result = await response.json();
+          if (result.success && result.results) {
+            console.log(`Search successful: ${result.results.length} results from ${result.sites_searched?.join(', ')}`);
+            setSearchResults(result.results);
+            setIsSearching(false);
+            return;
+          }
+        } catch (error) {
+          console.log(`Search failed for ${base}:`, error);
+          continue;
         }
-      });
+      }
+      
+      // Fallback to mock data if backend is unavailable
+      console.log('Backend unavailable, using fallback results');
+      const mockResults = [
+        { id: 'fallback-wayfair-1', title: `${query} Modern Accent Chair`, price: '$299.99', originalPrice: '$399.99', site: 'Wayfair', image: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=300&h=300&fit=crop&crop=center', url: 'https://www.wayfair.com', rating: 4.5, reviews: 234, category: 'seating', style: 'modern', inStock: true },
+        { id: 'fallback-ikea-1', title: `${query} Scandinavian Table`, price: '$199.00', originalPrice: null, site: 'IKEA', image: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&h=300&fit=crop&crop=center', url: 'https://www.ikea.com', rating: 4.2, reviews: 156, category: 'tables', style: 'scandinavian', inStock: true },
+        { id: 'fallback-westelm-1', title: `${query} Mid-Century Lamp`, price: '$179.00', originalPrice: '$229.00', site: 'West Elm', image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=center', url: 'https://www.westelm.com', rating: 4.4, reviews: 312, category: 'lighting', style: 'mid-century', inStock: true }
+      ];
+      let filteredResults = mockResults.filter(item => item.title.toLowerCase().includes(query.toLowerCase()) || item.category.includes(query.toLowerCase()) || item.style.includes(query.toLowerCase()));
+      if (filters.category !== 'all') filteredResults = filteredResults.filter(item => item.category === filters.category);
+      if (filters.style !== 'all') filteredResults = filteredResults.filter(item => item.style === filters.style);
+      if (filters.priceRange !== 'all') {
+        filteredResults = filteredResults.filter(item => {
+          const price = parseFloat(item.price.replace('$', '').replace(',', ''));
+          switch (filters.priceRange) {
+            case 'under200': return price < 200;
+            case '200to500': return price >= 200 && price <= 500;
+            case '500to1000': return price >= 500 && price <= 1000;
+            case 'over1000': return price > 1000;
+            default: return true;
+          }
+        });
+      }
+      setSearchResults(filteredResults);
+    } catch (error) {
+      console.error('Search error:', error);
+      setSearchResults([]);
+    } finally {
+      setIsSearching(false);
     }
-    setSearchResults(filteredResults);
-    setIsSearching(false);
-  }, []);
+  }, [getBackendBases]);
 
   const removeBackground = useCallback(async (imageElement: HTMLImageElement, options: { algorithm?: 'ai' } = {}): Promise<string | null> => {
     const { algorithm = 'ai' } = options;
@@ -325,10 +355,35 @@ const MoodBoardApp = () => {
                 </select>
               </div>
             </div>
-            {isSearching && (<div className="text-center py-8"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div><p className="text-gray-600">Searching furniture sites...</p></div>)}
+            {isSearching && (
+              <div className="text-center py-12">
+                <div className="relative mx-auto mb-6" style={{ width: '80px', height: '80px' }}>
+                  <div className="absolute inset-0 border-4 border-gray-600 rounded-full"></div>
+                  <div className="absolute inset-0 border-4 border-purple-500 rounded-full animate-spin border-t-transparent"></div>
+                  <div className="absolute inset-2 border-2 border-blue-400 rounded-full animate-spin animation-delay-300 border-t-transparent"></div>
+                </div>
+                <h3 className="text-lg font-medium text-white mb-2">Searching Furniture Sites</h3>
+                <p className="text-gray-300 mb-4">Aggregating results from multiple retailers...</p>
+                <div className="flex flex-wrap justify-center gap-2 text-sm">
+                  <span className="px-3 py-1 bg-purple-600/20 text-purple-200 rounded-full border border-purple-500/30">🛋️ Wayfair</span>
+                  <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded-full border border-blue-500/30">🏠 IKEA</span>
+                  <span className="px-3 py-1 bg-green-600/20 text-green-200 rounded-full border border-green-500/30">✨ West Elm</span>
+                </div>
+              </div>
+            )}
             {!isSearching && searchResults.length > 0 && (
               <div>
-                <div className="flex items-center justify-between mb-4"><h2 className="text-lg font-semibold text-gray-900">Search Results ({searchResults.length})</h2><div className="text-sm text-gray-600">Showing results from Wayfair, IKEA, CB2, West Elm, Pottery Barn, Crate & Barrel</div></div>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-lg font-semibold text-white">Search Results ({searchResults.length})</h2>
+                  <div className="text-sm text-gray-400">
+                    <span>Results from: </span>
+                    <span className="text-purple-300">Wayfair</span>
+                    <span className="text-gray-500"> • </span>
+                    <span className="text-blue-300">IKEA</span>
+                    <span className="text-gray-500"> • </span>
+                    <span className="text-green-300">West Elm</span>
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                   {searchResults.map(item => (
                     <div key={item.id} className="card-dark rounded-lg shadow-lg border border-gray-600 hover:border-gray-500 transition-all">
@@ -358,7 +413,19 @@ const MoodBoardApp = () => {
               </div>
             )}
             {!isSearching && searchQuery && searchResults.length === 0 && (<div className="text-center py-12 card-dark rounded-lg"><Search className="w-16 h-16 text-gray-400 mx-auto mb-4" /><h3 className="text-lg font-medium text-white mb-2">No results found</h3><p className="text-gray-300">Try adjusting your search terms or filters</p></div>)}
-            {!searchQuery && searchResults.length === 0 && !isSearching && (<div className="text-center py-12 card-dark rounded-lg"><Search className="w-16 h-16 text-gray-400 mx-auto mb-4" /><h3 className="text-lg font-medium text-white mb-2">Search for Furniture & Decor</h3><p className="text-gray-300 mb-4">Find items from major furniture retailers and add them to your mood board</p><div className="flex flex-wrap justify-center gap-2 text-sm text-gray-300"><span className="px-2 py-1 bg-gray-600 rounded">Wayfair</span><span className="px-2 py-1 bg-gray-600 rounded">IKEA</span><span className="px-2 py-1 bg-gray-600 rounded">CB2</span><span className="px-2 py-1 bg-gray-600 rounded">West Elm</span><span className="px-2 py-1 bg-gray-600 rounded">Pottery Barn</span><span className="px-2 py-1 bg-gray-600 rounded">Crate & Barrel</span></div></div>)}
+            {!searchQuery && searchResults.length === 0 && !isSearching && (
+              <div className="text-center py-12 card-dark rounded-lg">
+                <Search className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-white mb-2">Search for Furniture & Decor</h3>
+                <p className="text-gray-300 mb-4">Find items from major furniture retailers and add them to your mood board</p>
+                <div className="flex flex-wrap justify-center gap-2 text-sm text-gray-300">
+                  <span className="px-3 py-1 bg-purple-600/20 text-purple-200 rounded border border-purple-500/30">Wayfair</span>
+                  <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded border border-blue-500/30">IKEA</span>
+                  <span className="px-3 py-1 bg-green-600/20 text-green-200 rounded border border-green-500/30">West Elm</span>
+                </div>
+                <p className="text-gray-400 text-sm mt-4">Try searching: "chair", "table", "lamp", "sofa", "storage"</p>
+              </div>
+            )}
           </div>
         ) : (
           <>

@@ -486,6 +486,8 @@ def furniture_search():
         logger.error(f"Search failed: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+# Removed duplicate - using the existing comprehensive search implementation above
+
 if __name__ == '__main__':
     logger.info("Starting rembg background removal + furniture search server...")
     try:
