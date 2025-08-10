@@ -28,6 +28,12 @@ try:
 except Exception:
     wayfair_get_products = None
 
+# NEW: Try to import Pottery Barn extractor for parsing API JSON
+try:
+    from pottery_barn import extract_product_info as pb_extract_product_info
+except Exception:
+    pb_extract_product_info = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -162,8 +168,6 @@ def make_result(idx_prefix: str, idx: int, title: str, price_val, site: str, ima
         'site': site,
         'image': image,
         'url': url,
-        'rating': round(random.uniform(3.5, 5.0), 1),
-        'reviews': random.randint(5, 500),
         'category': category if category != 'all' else 'general',
         'style': style if style != 'all' else 'unspecified',
         'inStock': True
@@ -174,7 +178,7 @@ def make_result(idx_prefix: str, idx: int, title: str, price_val, site: str, ima
 def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: str) -> List[Dict[str, Any]]:
     """Convert results from python-backend/wayfair.get_products() into app schema.
     Expected input item keys: title, price, url, image
-    Output schema keys: id, title, price, originalPrice, site, image, url, rating, reviews, category, style, inStock
+    Output schema keys: id, title, price, originalPrice, site, image, url, category, style, inStock
     """
     adapted: List[Dict[str, Any]] = []
     if not isinstance(items, list):
@@ -200,10 +204,6 @@ def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: s
         except Exception:
             return None
 
-    def _extract_reviews(rv):
-        # Default to random reviews count since reviews are no longer scraped
-        return random.randint(50, 500)
-
     for i, it in enumerate(items):
         if not isinstance(it, dict):
             continue
@@ -213,9 +213,6 @@ def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: s
         url = it.get('url') or ''
         price_str = _extract_price_str(it.get('price'))
         price_val = _extract_price_float(it.get('price'))
-        # Default to random rating since star_rating is no longer scraped
-        rating = round(random.uniform(3.5, 5.0), 1)
-        reviews = _extract_reviews(None)
 
         img_url = it.get('image') or ''
         if isinstance(img_url, str):
@@ -234,13 +231,106 @@ def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: s
             'site': 'Wayfair',
             'image': img_url or '/window.svg',
             'url': url,
-            'rating': rating,
-            'reviews': reviews,
             'category': category or 'all',
             'style': style or 'all',
             'inStock': True,
         })
 
+    return adapted
+
+# NEW: Pottery Barn helpers (API-based)
+
+def _fetch_pottery_barn_raw(query: str, num_results: int = 20):
+    """Fetch Pottery Barn search JSON via Constructor.io API for a given query."""
+    try:
+        url = f"https://ac.cnstrc.com/search/{quote_plus(query)}"
+        params = {
+            "c": "ciojs-client-2.66.0",
+            "key": "key_w3v8XC1kGR9REv46",
+            "i": "f70eef75-549d-4dc0-98e1-5addb6c8c3cc",
+            "s": "3",
+            "offset": "0",
+            "num_results_per_page": str(num_results),
+        }
+        r = requests.get(url, params=params, timeout=TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        logger.warning(f"Pottery Barn fetch failed: {e}")
+        return None
+
+def _pb_simple_extract(data) -> List[Dict[str, Any]]:
+    """Fallback extractor if pottery_barn.extract_product_info isn't importable."""
+    items: List[Dict[str, Any]] = []
+    try:
+        results = []
+        if data and isinstance(data, dict):
+            if 'response' in data and isinstance(data['response'], dict) and 'results' in data['response']:
+                results = data['response']['results']
+            elif 'results' in data:
+                results = data['results']
+        for it in results:
+            pdata = (it.get('data') or {}) if isinstance(it, dict) else {}
+            title = pdata.get('title') or ''
+            if not title:
+                continue
+            price = pdata.get('lowestPrice') or pdata.get('salePriceMin')
+            price_str = f"${price}" if price else ''
+            items.append({
+                'title': title,
+                'price': price_str,
+                'url': pdata.get('url', ''),
+                'image': pdata.get('image_url', ''),
+            })
+    except Exception:
+        return []
+    return items
+
+def pb_get_products(query: str, num_results: int = 20) -> List[Dict[str, Any]]:
+    raw = _fetch_pottery_barn_raw(query, num_results=num_results)
+    if not raw:
+        return []
+    if pb_extract_product_info:
+        try:
+            return pb_extract_product_info(raw) or []
+        except Exception as e:
+            logger.warning(f"Pottery Barn extract_product_info failed: {e}; falling back to simple extractor")
+    return _pb_simple_extract(raw)
+
+
+def _adapt_pottery_barn_products(items: List[Dict[str, Any]], category: str, style: str) -> List[Dict[str, Any]]:
+    adapted: List[Dict[str, Any]] = []
+    PRICE_REGEX = re.compile(r'\$\s*([0-9][0-9,]*\.?[0-9]{0,2})')
+
+    def _price_str(p):
+        if p is None:
+            return None
+        s = str(p)
+        m = PRICE_REGEX.search(s)
+        if m:
+            return f"${m.group(1)}"
+        return s if '$' in s else None
+
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        title = (it.get('title') or '').strip()
+        if not title:
+            continue
+        url = it.get('url') or ''
+        img = it.get('image') or ''
+        adapted.append({
+            'id': f'potterybarn-{i+1}',
+            'title': title,
+            'price': _price_str(it.get('price')) or '$',
+            'originalPrice': None,
+            'site': 'Pottery Barn',
+            'image': img or '/window.svg',
+            'url': url,
+            'category': category or 'all',
+            'style': style or 'all',
+            'inStock': True,
+        })
     return adapted
 
 # --- Wayfair scraping helpers (resilient) ---
@@ -1021,7 +1111,7 @@ def _search_serpapi_for_domain(query: str, domain: str, price_min, price_max, ca
 
 @app.route('/search-furniture', methods=['POST'])
 def search_furniture_endpoint():
-    """Multi-site furniture search aggregating results from Wayfair, IKEA, and West Elm.
+    """Multi-site furniture search aggregating results from Wayfair, IKEA, West Elm, and Pottery Barn.
     WARNING: Demo scraping only; respect site ToS and robots.txt for production use.
     """
     try:
@@ -1041,35 +1131,60 @@ def search_furniture_endpoint():
         
         logger.info(f"Multi-site search for: '{query}' with filters: {filters}")
 
-        # NEW: Prefer dedicated Wayfair module only (for now)
+        # NEW: Prefer dedicated Wayfair module only (for now) — now combined with Pottery Barn
         if WAYFAIR_ONLY and wayfair_get_products is not None and not data.get('forceMultiSite'):
             try:
-                # Support both signatures get_products(query) and get_products(query=...)
+                # Wayfair
                 try:
                     wayfair_items = wayfair_get_products(query)
                 except TypeError:
                     wayfair_items = wayfair_get_products(query=query)
-                adapted = _adapt_wayfair_products(wayfair_items, category, style)
-                if adapted:
+                wf_adapted = _adapt_wayfair_products(wayfair_items, category, style)
+
+                # Pottery Barn via API
+                pb_items = pb_get_products(query)
+                pb_adapted = _adapt_pottery_barn_products(pb_items, category, style) if pb_items else []
+
+                # Combine + dedupe by URL
+                combined = []
+                seen_urls = set()
+                for lst in (wf_adapted, pb_adapted):
+                    for it in lst:
+                        u = it.get('url') or ''
+                        if u and u in seen_urls:
+                            continue
+                        if u:
+                            seen_urls.add(u)
+                        combined.append(it)
+
+                if combined:
+                    random.shuffle(combined)
+                    final = combined[:20]
+                    sites = []
+                    if wf_adapted:
+                        sites.append('Wayfair')
+                    if pb_adapted:
+                        sites.append('Pottery Barn')
                     response = {
                         'success': True,
-                        'results': adapted[:20],
-                        'total': len(adapted[:20]),
+                        'results': final,
+                        'total': len(final),
                         'query': query,
-                        'sites_searched': ['Wayfair']
+                        'sites_searched': sites or ['Wayfair']
                     }
                     if debug_flag:
                         response['debug'] = {
                             'wayfairOnly': True,
                             'priceRange': [price_min, price_max],
-                            'rawCount': len(wayfair_items) if isinstance(wayfair_items, list) else None
+                            'wayfair_raw_count': len(wayfair_items) if isinstance(wayfair_items, list) else None,
+                            'pb_raw_count': len(pb_items) if isinstance(pb_items, list) else None
                         }
-                    logger.info(f"Returning {len(response['results'])} results from Wayfair module")
+                    logger.info(f"Returning {len(response['results'])} results from Wayfair + Pottery Barn modules")
                     return jsonify(response)
                 else:
-                    logger.warning("Wayfair module returned no adaptable items; falling back to existing scrapers")
+                    logger.warning("Wayfair+PB modules returned no adaptable items; falling back to HTML scrapers")
             except Exception as e:
-                logger.error(f"Wayfair module failed: {e}; falling back to existing scrapers")
+                logger.error(f"Wayfair/Pottery Barn module path failed: {e}; falling back to existing scrapers")
         
         # Search all sites in parallel-ish (could use threading for better performance)
         all_results = []
@@ -1135,6 +1250,26 @@ def search_furniture_endpoint():
         except Exception as e:
             logger.error(f"West Elm search failed: {e}")
             debug_info['westelm'] = {'error': str(e)}
+
+        # NEW: Add Pottery Barn API results to multi-site flow
+        try:
+            pb_items = pb_get_products(query)
+            pb_adapted = _adapt_pottery_barn_products(pb_items, category, style) if pb_items else []
+            added = 0
+            for it in pb_adapted:
+                if it['url'] and it['url'] in seen_urls:
+                    continue
+                if it['url']:
+                    seen_urls.add(it['url'])
+                all_results.append(it)
+                added += 1
+            if added:
+                sites_searched.append('Pottery Barn')
+            debug_info['pottery_barn'] = {'raw_count': len(pb_items) if isinstance(pb_items, list) else None, 'adapted': len(pb_adapted)}
+            logger.info(f"Pottery Barn returned {len(pb_adapted)} results")
+        except Exception as e:
+            logger.error(f"Pottery Barn fetch failed: {e}")
+            debug_info['pottery_barn'] = {'error': str(e)}
 
         # If no results from scraping, optional fallback
         if not all_results:
