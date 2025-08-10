@@ -2,26 +2,47 @@ import requests
 import json
 import csv
 from datetime import datetime
+from urllib.parse import quote_plus
 
-def fetch_pottery_barn_data():
-    """Fetch data from Pottery Barn API"""
-    url = "https://ac.cnstrc.com/search/sofa"
+try:
+    from constructor_keys import get_keys as ctor_get_keys
+except Exception:
+    ctor_get_keys = None  # type: ignore
+
+# Default fallbacks
+_DEFAULT_KEY = "key_w3v8XC1kGR9REv46"
+_DEFAULT_CLIENTLIB = "ciojs-client-2.66.0"
+
+
+def fetch_pottery_barn_data(query: str = "sofa", num_results: int = 20):
+    """Fetch data from Pottery Barn Constructor.io Search API for a given query."""
+    url = f"https://ac.cnstrc.com/search/{quote_plus(query)}"
+    # Pull overrides from store on every call
+    api_key = _DEFAULT_KEY
+    client_lib = _DEFAULT_CLIENTLIB
+    if 'ctor_get_keys' in globals() and ctor_get_keys:
+        try:
+            k, c = ctor_get_keys('pottery_barn', fallback_key=api_key, fallback_clientlib=client_lib)
+            api_key = k or api_key
+            client_lib = c or client_lib
+        except Exception:
+            pass
     params = {
-        "c": "ciojs-client-2.66.0",
-        "key": "key_w3v8XC1kGR9REv46",
+        "c": client_lib,
+        "key": api_key,
         "i": "f70eef75-549d-4dc0-98e1-5addb6c8c3cc",
         "s": "3",
         "offset": "0",
-        "num_results_per_page": "20",
+        "num_results_per_page": str(num_results),
     }
-    
     try:
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=20)
         response.raise_for_status()  # Raise an exception for bad status codes
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"Error fetching data: {e}")
         return None
+
 
 def extract_product_info(data):
     """Extract structured product information from API response"""
@@ -59,6 +80,7 @@ def extract_product_info(data):
     
     return products
 
+
 def save_to_csv(products, filename="pottery_barn_products.csv"):
     """Save products to CSV file"""
     if not products:
@@ -75,6 +97,7 @@ def save_to_csv(products, filename="pottery_barn_products.csv"):
     
     print(f"CSV data saved to {filename}")
 
+
 def display_products(products):
     """Display product information in console"""
     if not products:
@@ -82,23 +105,26 @@ def display_products(products):
         return
     
     print(f"\n{'='*60}")
-    print(f"POTTERY BARN SOFA COLLECTION ({len(products)} items found)")
+    print(f"POTTERY BARN COLLECTION ({len(products)} items found)")
     print(f"{'='*60}")
     
     for i, product in enumerate(products, 1):
         print(f"\n{i}. {product['title']}")
-        print(f"   Price: {product['price']}")
-        if product['url']:
+        if product.get('price'):
+            print(f"   Price: {product['price']}")
+        if product.get('url'):
             print(f"   URL: {product['url']}")
-        if product['image']:
+        if product.get('image'):
             print(f"   Image: {product['image']}")
         print(f"   {'-'*40}")
 
+
 def main():
+    query = "sofa"
     print("Fetching Pottery Barn product data...")
     
     # Fetch data from API
-    raw_data = fetch_pottery_barn_data()
+    raw_data = fetch_pottery_barn_data(query=query)
     if not raw_data:
         print("Failed to fetch data. Exiting.")
         return
@@ -120,6 +146,7 @@ def main():
         print(f"{'='*60}")
     else:
         print("No products found to export")
+
 
 if __name__ == "__main__":
     main()

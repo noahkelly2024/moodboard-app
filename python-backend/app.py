@@ -48,6 +48,14 @@ except Exception:
     rf_fetch_autocomplete = None  # type: ignore
     rf_extract_results = None  # type: ignore
 
+# Centralized Constructor.io key storage
+try:
+    from constructor_keys import get_keys as ctor_get_keys, save_keys as ctor_save_keys, status as ctor_status
+except Exception:
+    ctor_get_keys = None  # type: ignore
+    ctor_save_keys = None  # type: ignore
+    ctor_status = None  # type: ignore
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -328,9 +336,16 @@ def _fetch_pottery_barn_raw(query: str, num_results: int = 20):
     """Fetch Pottery Barn search JSON via Constructor.io API for a given query."""
     try:
         url = f"https://ac.cnstrc.com/search/{quote_plus(query)}"
+        # Pull API key/clientlib from persistent store if available
+        api_key = "key_w3v8XC1kGR9REv46"
+        client_lib = "ciojs-client-2.66.0"
+        if ctor_get_keys:
+            k, c = ctor_get_keys('pottery_barn', fallback_key=api_key, fallback_clientlib=client_lib)
+            api_key = k or api_key
+            client_lib = c or client_lib
         params = {
-            "c": "ciojs-client-2.66.0",
-            "key": "key_w3v8XC1kGR9REv46",
+            "c": client_lib,
+            "key": api_key,
             "i": "f70eef75-549d-4dc0-98e1-5addb6c8c3cc",
             "s": "3",
             "offset": "0",
@@ -1550,6 +1565,51 @@ def search_furniture_endpoint():
 # NEW: Adapter for dedicated Wayfair module results (moved above usage)
 # def _adapt_wayfair_products(...):
 #     Moved above search_furniture_endpoint to ensure availability at runtime.
+
+@app.route('/constructor-keys/status', methods=['GET'])
+def constructor_keys_status():
+    try:
+        if not ctor_status:
+            return jsonify({'success': False, 'error': 'Key store unavailable'}), 500
+        return jsonify({'success': True, 'status': ctor_status()})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/constructor-keys/refresh', methods=['POST'])
+def constructor_keys_refresh():
+    """Refresh Constructor.io keys for supported sites using Playwright capture.
+    Requires playwright and browser binaries installed.
+    """
+    try:
+        if not ctor_save_keys or not ctor_status:
+            return jsonify({'success': False, 'error': 'Key store unavailable'}), 500
+        try:
+            from refresh_api_keys import fetch_keys_once  # type: ignore
+        except Exception as e:
+            return jsonify({'success': False, 'error': f'Playwright refresh not available: {e}'}), 500
+        # Run refresh in NON-headless mode per request (use original script)
+        try:
+            keys = fetch_keys_once(headless=False)  # type: ignore
+        except TypeError:
+            # Backward compatibility if function has no headless param
+            keys = fetch_keys_once()  # type: ignore
+        if not keys:
+            return jsonify({'success': False, 'error': 'No keys captured'}), 500
+        merged = ctor_save_keys(keys)
+        stat = ctor_status()
+        # Compute sites missing key or clientlib after refresh
+        missing_sites = [
+            s for s, v in (stat or {}).items()
+            if not (isinstance(v, dict) and v.get('has_key') and v.get('has_clientlib'))
+        ]
+        return jsonify({
+            'success': True,
+            'keys': {k: {"key": v.get('key'), "clientlib": v.get('clientlib')} for k, v in merged.items()},
+            'status': stat,
+            'missing_sites': missing_sites,
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     logger.info("Starting furniture search + rembg backend server...")

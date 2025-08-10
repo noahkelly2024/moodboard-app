@@ -1,0 +1,17 @@
+{
+  "west_elm": {
+    "key": "key_SQBuGmXjiXmP0UNI",
+    "clientlib": "ciojs-client-2.66.0",
+    "updated_at": "2025-08-10T23:33:30.268020Z"
+  },
+  "pottery_barn": {
+    "key": "key_w3v8XC1kGR9REv46",
+    "clientlib": "ciojs-client-2.66.0",
+    "updated_at": "2025-08-10T23:33:30.268032Z"
+  },
+  "raymour_flanigan": {
+    "key": "key_1tigFZoUEs7Ygkww",
+    "clientlib": "cio-ui-autocomplete-1.23.27",
+    "updated_at": "2025-08-10T23:19:08.565835Z"
+  }
+}

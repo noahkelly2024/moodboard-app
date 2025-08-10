@@ -35,6 +35,11 @@ const MoodBoardApp = () => {
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [aiModelLoading, setAiModelLoading] = useState<boolean>(false);
   const [aiAvailable, setAiAvailable] = useState<boolean>(false);
+  // NEW: Constructor.io admin state
+  const [showAdmin, setShowAdmin] = useState<boolean>(false);
+  const [keyStatus, setKeyStatus] = useState<{ loading: boolean; data: any | null; error: string | null }>({ loading: false, data: null, error: null });
+  const [isRefreshingKeys, setIsRefreshingKeys] = useState<boolean>(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   // removed unused canvasRef
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -65,6 +70,60 @@ const MoodBoardApp = () => {
     const id = setInterval(check, 3000);
     return () => { ignore = true; clearInterval(id); };
   }, [getBackendBases]);
+
+  // NEW: Admin helpers for Constructor.io keys
+  const fetchConstructorKeyStatus = useCallback(async () => {
+    setKeyStatus(s => ({ ...s, loading: true, error: null }));
+    for (const base of getBackendBases()) {
+      try {
+        const res = await fetch(`${base}/constructor-keys/status`, { cache: 'no-store' });
+        if (!res.ok) continue;
+        const json = await res.json();
+        if (json.success) {
+          setKeyStatus({ loading: false, data: json.status, error: null });
+          return;
+        } else {
+          setKeyStatus({ loading: false, data: null, error: json.error || 'Failed to load status' });
+          return;
+        }
+      } catch (e) {
+        // try next base
+      }
+    }
+    setKeyStatus({ loading: false, data: null, error: 'Backend unavailable' });
+  }, [getBackendBases]);
+
+  const refreshConstructorKeys = useCallback(async () => {
+    setIsRefreshingKeys(true);
+    for (const base of getBackendBases()) {
+      try {
+        const res = await fetch(`${base}/constructor-keys/refresh`, { method: 'POST' });
+        if (!res.ok) continue;
+        const json = await res.json();
+        if (json.success) {
+          setIsRefreshingKeys(false);
+          // Prefer status if present; also keep missing_sites from refresh payload
+          const data = json.status ? { ...json.status, missing_sites: json.missing_sites } : (json.keys || null);
+          setKeyStatus({ loading: false, data, error: null });
+          return;
+        } else {
+          setIsRefreshingKeys(false);
+          setKeyStatus(s => ({ ...s, error: json.error || 'Refresh failed' }));
+          return;
+        }
+      } catch (e) {
+        // try next base
+      }
+    }
+    setIsRefreshingKeys(false);
+    setKeyStatus(s => ({ ...s, error: 'Backend unavailable' }));
+  }, [getBackendBases]);
+
+  React.useEffect(() => {
+    if (activeTab === 'search' && showAdmin) {
+      fetchConstructorKeyStatus();
+    }
+  }, [activeTab, showAdmin, fetchConstructorKeyStatus]);
 
   // Real furniture search API - aggregates results from multiple sites
   const searchFurniture = useCallback(async (query: string, filters: SearchFilters) => {
@@ -274,6 +333,37 @@ const MoodBoardApp = () => {
 
   const updateSlideBackgroundColor = useCallback((color: string) => { setSlides(prev => prev.map((slide, idx) => idx === currentSlide ? { ...slide, backgroundColor: color } : slide)); }, [currentSlide]);
 
+  // Helper to render status cards for admin panel
+  const SITE_LABELS: Record<string, string> = { pottery_barn: 'Pottery Barn', west_elm: 'West Elm', raymour_flanigan: 'Raymour & Flanigan' };
+  const renderKeyStatus = (data: any) => {
+    const keys = ['pottery_barn', 'west_elm', 'raymour_flanigan'];
+    return (
+      <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
+        {keys.map(k => {
+          const entry: any = data?.[k] || {};
+          const value: any = entry?.value || entry; // support different shapes
+          const hasKey = value?.has_key === true || !!value?.key;
+          const hasClientlib = value?.has_clientlib === true || !!value?.clientlib;
+          const clientlib = typeof value?.clientlib === 'string' ? value.clientlib : '';
+          const updatedAt = value?.updated_at as string | undefined;
+          return (
+            <div key={k} className="p-2 bg-gray-700/60 rounded border border-gray-600/40">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-gray-200 font-medium">{SITE_LABELS[k]}</span>
+                <div className="flex items-center gap-1">
+                  <span className={`px-2 py-0.5 rounded ${hasKey ? 'bg-green-600/30 text-green-200' : 'bg-yellow-600/30 text-yellow-200'}`}>Key {hasKey ? 'OK' : 'Missing'}</span>
+                  <span className={`px-2 py-0.5 rounded ${hasClientlib ? 'bg-green-600/30 text-green-200' : 'bg-yellow-600/30 text-yellow-200'}`}>Clientlib {hasClientlib ? 'OK' : 'Missing'}</span>
+                </div>
+              </div>
+              <div className="text-gray-300 truncate">clientlib: {clientlib || '-'}</div>
+              <div className="text-gray-400 mt-0.5">{updatedAt ? `updated: ${new Date(updatedAt).toLocaleString()}` : 'updated: -'}</div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
       <header className="glass-effect border-b border-gray-700/50">
@@ -335,6 +425,8 @@ const MoodBoardApp = () => {
                 </div>
                 <button onClick={handleSearch} disabled={isSearching || !searchQuery.trim()} className="btn-gradient disabled:opacity-50 disabled:cursor-not-allowed"> {isSearching ? 'Searching...' : 'Search'} </button>
                 {(searchQuery || searchResults.length > 0) && (<button onClick={clearSearch} className="p-2 text-gray-400 hover:text-gray-300 transition-colors"><X className="w-5 h-5" /></button>)}
+                {/* NEW: Admin toggle */}
+                <button onClick={() => setShowAdmin(v => !v)} className={`px-3 py-2 text-sm rounded ${showAdmin ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-200 hover:bg-gray-600'}`}>Keys</button>
               </div>
               <div className="flex flex-wrap gap-4">
                 <div className="flex items-center space-x-2"><Filter className="w-4 h-4 text-gray-400" /><span className="text-sm text-gray-300">Filters:</span></div>
@@ -348,6 +440,23 @@ const MoodBoardApp = () => {
                   <option value="all">All Prices</option><option value="under200">Under $200</option><option value="200to500">$200 - $500</option><option value="500to1000">$500 - $1,000</option><option value="over1000">Over $1,000</option>
                 </select>
               </div>
+              {showAdmin && (
+                <div className="mt-4 p-3 rounded-lg border border-gray-700 bg-gray-800/50">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm text-gray-200">Retailer API Keys</div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={fetchConstructorKeyStatus} disabled={keyStatus.loading || isRefreshingKeys} className="px-2 py-1 text-xs rounded bg-gray-700 text-gray-200 hover:bg-gray-600 disabled:opacity-50">{keyStatus.loading ? 'Loading...' : 'Check Status'}</button>
+                      <button onClick={refreshConstructorKeys} disabled={isRefreshingKeys} className="px-2 py-1 text-xs rounded btn-gradient disabled:opacity-50 flex items-center gap-1">{isRefreshingKeys ? (<><div className="w-3 h-3 border-2 border-white/70 border-t-transparent rounded-full animate-spin" /> Refreshing...</>) : (<><RotateCw className="w-3 h-3" /> Refresh Keys</> )}</button>
+                    </div>
+                  </div>
+                  {keyStatus.error && (<div className="text-xs text-red-400">{keyStatus.error}</div>)}
+                  {keyStatus.data && renderKeyStatus(keyStatus.data)}
+                  {/* If refresh response includes missing_sites list, surface it */}
+                  {Array.isArray((keyStatus as any)?.data?.missing_sites) && (keyStatus as any).data.missing_sites.length > 0 && (
+                    <div className="mt-2 text-xs text-yellow-300">Missing after refresh: {(keyStatus as any).data.missing_sites.join(', ')}</div>
+                  )}
+                </div>
+              )}
             </div>
             {isSearching && (
               <div className="text-center py-12">

@@ -4,9 +4,20 @@ import uuid
 import time
 from urllib.parse import quote_plus
 
+try:
+    from constructor_keys import get_keys as ctor_get_keys
+except Exception:
+    ctor_get_keys = None  # type: ignore
+
 API_BASE = "https://ac.cnstrc.com"
 API_KEY = "key_SQBuGmXjiXmP0UNI"
 CLIENT_LIB = "ciojs-client-2.66.0"
+# Override from key store if available
+if 'ctor_get_keys' in globals() and ctor_get_keys:
+    k, c = ctor_get_keys('west_elm', fallback_key=API_KEY, fallback_clientlib=CLIENT_LIB)
+    API_KEY = k or API_KEY
+    CLIENT_LIB = c or CLIENT_LIB
+
 ORIGIN = "https://www.westelm.com"
 REFERER = "https://www.westelm.com/"
 
@@ -26,10 +37,21 @@ def fetch_west_elm_autocomplete(query="rug", num_suggestions=0, num_products=12,
     if not client_id:
         client_id = str(uuid.uuid4())
 
+    # Pull latest key/clientlib from persistent store each call
+    api_key = API_KEY
+    client_lib = CLIENT_LIB
+    if 'ctor_get_keys' in globals() and ctor_get_keys:
+        try:
+            k, c = ctor_get_keys('west_elm', fallback_key=api_key, fallback_clientlib=client_lib)
+            api_key = k or api_key
+            client_lib = c or client_lib
+        except Exception:
+            pass
+
     url = f"{API_BASE}/autocomplete/{quote_plus(query)}"
     params = {
-        "c": CLIENT_LIB,
-        "key": API_KEY,
+        "c": client_lib,
+        "key": api_key,
         "i": client_id,
         "s": str(session),
         # Note: the API expects this exact key with a space in it; requests will encode it properly.
