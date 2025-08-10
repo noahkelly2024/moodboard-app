@@ -38,6 +38,19 @@ except Exception:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Register additional image format plugins (AVIF/HEIF) for Pillow
+try:
+    from pillow_heif import register_heif, register_avif  # type: ignore
+    register_heif()
+    register_avif()
+except Exception:
+    pass
+try:
+    # Importing registers the AVIF plugin for Pillow
+    from pillow_avif import AvifImagePlugin  # type: ignore  # noqa: F401
+except Exception:
+    pass
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
@@ -54,6 +67,21 @@ TIMEOUT = 10
 MAX_PER_SITE = 6  # limit per retailer to reduce scraping load
 
 # --- Utility helpers ---
+
+def _referer_for_url(url: str) -> str | None:
+    try:
+        netloc = urlparse('https:' + url if url.startswith('//') else url).netloc.lower()
+    except Exception:
+        return None
+    if any(k in netloc for k in ('potterybarn.com', 'pbimgs.com', 'weimgs.com', 'williamssonoma.com')):
+        return 'https://www.potterybarn.com/'
+    if 'wayfair' in netloc:
+        return 'https://www.wayfair.com/'
+    if 'ikea' in netloc:
+        return 'https://www.ikea.com/'
+    if 'westelm' in netloc or 'west-elm' in netloc:
+        return 'https://www.westelm.com/'
+    return None
 
 def base64_to_image(base64_string):
     """Convert base64 string to PIL Image."""
@@ -73,6 +101,41 @@ def base64_to_image(base64_string):
         return image
     except Exception as e:
         logger.error(f"Error converting base64 to image: {e}")
+        raise
+
+def fetch_image_from_url(url: str) -> Image.Image:
+    """Fetch an image from a URL and return a PIL Image with RGB mode.
+    Supports WebP/AVIF/HEIF when plugins are available. Adds Referer for PB/CDN if needed.
+    """
+    try:
+        if url.startswith('//'):
+            url = 'https:' + url
+        headers = {**_pick_headers(), 'Accept': 'image/avif,image/webp,image/*,*/*;q=0.8'}
+        ref = _referer_for_url(url)
+        if ref:
+            headers['Referer'] = ref
+        resp = requests.get(url, headers=headers, timeout=TIMEOUT, stream=True)
+        if resp.status_code == 403 and 'Referer' not in headers:
+            # Retry with a best-guess referer for hotlink-protected CDNs
+            guess_ref = _referer_for_url(url) or 'https://www.potterybarn.com/'
+            headers['Referer'] = guess_ref
+            resp = requests.get(url, headers=headers, timeout=TIMEOUT, stream=True)
+        resp.raise_for_status()
+        content_type = (resp.headers.get('Content-Type') or '').lower()
+        if 'svg' in content_type or url.lower().endswith('.svg'):
+            raise ValueError('SVG images are not supported for background removal')
+        img = Image.open(io.BytesIO(resp.content))
+        if img.mode in ('RGBA', 'LA', 'P'):
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+            img = background
+        elif img.mode != 'RGB':
+            img = img.convert('RGB')
+        return img
+    except Exception as e:
+        logger.error(f"Error fetching image from URL: {e}")
         raise
 
 def image_to_base64(image, format='PNG'):
@@ -106,11 +169,11 @@ def list_models():
 
 @app.route('/remove-background', methods=['POST'])
 def remove_background():
-    """Remove background from uploaded image."""
+    """Remove background from uploaded image. Accepts base64 data URI or direct image URL."""
     global session
     try:
         data = request.get_json()
-        if not data or 'image' not in data:
+        if not data or ('image' not in data and 'imageUrl' not in data):
             return jsonify({'error': 'No image data provided'}), 400
         model_name = data.get('model', 'u2net')
         if session is None or getattr(session, '_model_name', None) != model_name:
@@ -123,7 +186,12 @@ def remove_background():
                 logger.info("Falling back to u2net model")
                 session = new_session('u2net')
                 session._model_name = 'u2net'
-        input_image = base64_to_image(data['image'])
+        # Support both base64 and URL inputs
+        img_input = data.get('image') or data.get('imageUrl')
+        if isinstance(img_input, str) and (img_input.startswith('http://') or img_input.startswith('https://') or img_input.startswith('//')):
+            input_image = fetch_image_from_url(img_input)
+        else:
+            input_image = base64_to_image(img_input)
         logger.info(f"Processing image of size: {input_image.size} with model: {getattr(session, '_model_name', 'unknown')}")
         output_image = remove(input_image, session=session)
         result_base64 = image_to_base64(output_image, 'PNG')

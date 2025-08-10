@@ -35,7 +35,7 @@ const MoodBoardApp = () => {
   const [aiModelLoading, setAiModelLoading] = useState<boolean>(false);
   const [aiAvailable, setAiAvailable] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // removed unused canvasRef
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const compositionCanvasRef = useRef<HTMLDivElement>(null);
   const dragRafRef = useRef<number | null>(null);
@@ -98,9 +98,9 @@ const MoodBoardApp = () => {
       // Fallback to mock data if backend is unavailable
       console.log('Backend unavailable, using fallback results');
       const mockResults = [
-        { id: 'fallback-wayfair-1', title: `${query} Modern Accent Chair`, price: '$299.99', originalPrice: '$399.99', site: 'Wayfair', image: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=300&h=300&fit=crop&crop=center', url: 'https://www.wayfair.com', rating: 4.5, reviews: 234, category: 'seating', style: 'modern', inStock: true },
-        { id: 'fallback-ikea-1', title: `${query} Scandinavian Table`, price: '$199.00', originalPrice: null, site: 'IKEA', image: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&h=300&fit=crop&crop=center', url: 'https://www.ikea.com', rating: 4.2, reviews: 156, category: 'tables', style: 'scandinavian', inStock: true },
-        { id: 'fallback-westelm-1', title: `${query} Mid-Century Lamp`, price: '$179.00', originalPrice: '$229.00', site: 'West Elm', image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=center', url: 'https://www.westelm.com', rating: 4.4, reviews: 312, category: 'lighting', style: 'mid-century', inStock: true }
+        { id: 'fallback-wayfair-1', title: `${query} Modern Accent Chair`, price: '$299.99', originalPrice: '$399.99', site: 'Wayfair', image: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=300&h=300&fit=crop&crop=center', url: 'https://www.wayfair.com', category: 'seating', style: 'modern', inStock: true },
+        { id: 'fallback-potterybarn-1', title: `${query} Scandinavian Table`, price: '$199.00', originalPrice: null, site: 'Pottery Barn', image: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&h=300&fit=crop&crop=center', url: 'https://www.potterybarn.com', category: 'tables', style: 'scandinavian', inStock: true },
+        { id: 'fallback-wayfair-2', title: `${query} Mid-Century Lamp`, price: '$179.00', originalPrice: '$229.00', site: 'Wayfair', image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=center', url: 'https://www.wayfair.com', category: 'lighting', style: 'mid-century', inStock: true }
       ];
       let filteredResults = mockResults.filter(item => item.title.toLowerCase().includes(query.toLowerCase()) || item.category.includes(query.toLowerCase()) || item.style.includes(query.toLowerCase()));
       if (filters.category !== 'all') filteredResults = filteredResults.filter(item => item.category === filters.category);
@@ -126,33 +126,12 @@ const MoodBoardApp = () => {
     }
   }, [getBackendBases]);
 
-  const removeBackground = useCallback(async (imageElement: HTMLImageElement, options: { algorithm?: 'ai' } = {}): Promise<string | null> => {
-    const { algorithm = 'ai' } = options;
-    return new Promise(async (resolve) => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { resolve(null); return; }
-      canvas.width = imageElement.naturalWidth; canvas.height = imageElement.naturalHeight; ctx.drawImage(imageElement, 0, 0);
-      try {
-        let processedDataUrl: string | null = null;
-        if (algorithm === 'ai') {
-          setAiModelLoading(true);
-          processedDataUrl = await removeBackgroundWithRembgAPI(canvas, rembgModel);
-        }
-        resolve(processedDataUrl);
-      } catch (error) {
-        resolve(null);
-      } finally {
-        setAiModelLoading(false);
-      }
-    });
-  }, [rembgModel]);
-
-  const removeBackgroundWithRembgAPI = useCallback(async (canvas: HTMLCanvasElement, model: string = 'u2net'): Promise<string | null> => {
+  // Helper to call backend for background removal using either data URL or remote image URL
+  const removeBackgroundWithRembgAPI = useCallback(async (src: string, model: string = 'u2net'): Promise<string | null> => {
     try {
-      const dataUrl = canvas.toDataURL('image/png');
-      const payload = { image: dataUrl, model };
-      const bases = ['http://127.0.0.1:5000', 'http://localhost:5000'];
+      const isDataUrl = src.startsWith('data:');
+      const payload = isDataUrl ? { image: src, model } : { imageUrl: src, model } as any;
+      const bases = getBackendBases();
       for (const base of bases) {
         try {
           const response = await fetch(`${base}/remove-background`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -163,11 +142,11 @@ const MoodBoardApp = () => {
       }
       return null;
     } catch { return null; }
-  }, []);
+  }, [getBackendBases]);
 
   const addSearchResultToMoodBoard = useCallback(async (searchResult: SearchResult) => {
     try {
-      const newImage = { id: Date.now() + Math.random(), original: searchResult.image, processed: null, name: searchResult.title, useProcessed: false, searchMetadata: { price: searchResult.price, site: searchResult.site, url: searchResult.url, rating: searchResult.rating } };
+      const newImage = { id: Date.now() + Math.random(), original: searchResult.image, processed: null, name: searchResult.title, useProcessed: false, searchMetadata: { price: searchResult.price, site: searchResult.site, url: searchResult.url } };
       setImages(prev => [...prev, newImage]); setActiveTab('moodboard');
     } catch { alert('Failed to add item to mood board. Please try again.'); }
   }, []);
@@ -220,11 +199,28 @@ const MoodBoardApp = () => {
   const toggleImageSelection = useCallback((imageId: string | number) => { setSelectedImages(prev => { const newSet = new Set(prev); if (newSet.has(imageId)) newSet.delete(imageId); else newSet.add(imageId); return newSet; }); }, []);
   const toggleBackgroundRemoval = useCallback((imageId: string | number) => { setImages(prev => prev.map(img => img.id === imageId ? { ...img, useProcessed: !img.useProcessed } : img)); }, []);
 
-  const manualBackgroundRemoval = useCallback(async (imageId: string | number, _algorithm: 'ai') => { const image = images.find(img => img.id === imageId); if (!image) return; setProcessingImages(prev => new Set(prev).add(imageId)); try { const imgElement = new Image(); imgElement.crossOrigin = 'anonymous'; await new Promise((resolve, reject) => { imgElement.onload = resolve as any; imgElement.onerror = reject as any; imgElement.src = image.original; }); const processedUrl = await removeBackground(imgElement, { algorithm: 'ai' }); if (processedUrl) { setImages(prev => prev.map(img => img.id === imageId ? { ...img, processed: processedUrl, useProcessed: true } : img)); } else { alert('AI background removal failed.'); } } catch { alert('Background removal failed.'); } finally { setProcessingImages(prev => { const newSet = new Set(prev); newSet.delete(imageId); return newSet; }); } }, [images, removeBackground]);
+  const manualBackgroundRemoval = useCallback(async (imageId: string | number, _algorithm: 'ai') => {
+    const image = images.find(img => img.id === imageId); if (!image) return;
+    setProcessingImages(prev => new Set(prev).add(imageId));
+    setAiModelLoading(true);
+    try {
+      const processedUrl = await removeBackgroundWithRembgAPI(image.original, rembgModel);
+      if (processedUrl) {
+        setImages(prev => prev.map(img => img.id === imageId ? { ...img, processed: processedUrl, useProcessed: true } : img));
+      } else {
+        alert('AI background removal failed.');
+      }
+    } catch {
+      alert('Background removal failed.');
+    } finally {
+      setProcessingImages(prev => { const newSet = new Set(prev); newSet.delete(imageId); return newSet; });
+      setAiModelLoading(false);
+    }
+  }, [images, removeBackgroundWithRembgAPI, rembgModel]);
 
   const deleteImage = useCallback((imageId: string | number) => { setImages(prev => prev.filter(img => img.id !== imageId)); setSelectedImages(prev => { const newSet = new Set(prev); newSet.delete(imageId); return newSet; }); }, []);
 
-  const batchBackgroundRemoval = useCallback(async () => { const selectedImageArray = images.filter(img => selectedImages.has(img.id)); if (selectedImageArray.length === 0) return; setBatchProgress({ current: 0, total: selectedImageArray.length }); selectedImageArray.forEach(img => { setProcessingImages(prev => new Set(prev).add(img.id)); }); try { for (let index = 0; index < selectedImageArray.length; index++) { const image = selectedImageArray[index]; setBatchProgress({ current: index + 1, total: selectedImageArray.length }); try { const imgElement = new Image(); imgElement.crossOrigin = 'anonymous'; await new Promise((resolve, reject) => { imgElement.onload = resolve as any; imgElement.onerror = reject as any; imgElement.src = image.original; }); const processedUrl = await removeBackground(imgElement, { algorithm: 'ai' }); if (processedUrl) { setImages(prev => prev.map(img => img.id === image.id ? { ...img, processed: processedUrl, useProcessed: true } : img)); } } catch {} finally { setProcessingImages(prev => { const newSet = new Set(prev); newSet.delete(image.id); return newSet; }); } } } catch {} finally { setBatchProgress(null); } }, [images, selectedImages, removeBackground]);
+  const batchBackgroundRemoval = useCallback(async () => { const selectedImageArray = images.filter(img => selectedImages.has(img.id)); if (selectedImageArray.length === 0) return; setBatchProgress({ current: 0, total: selectedImageArray.length }); selectedImageArray.forEach(img => { setProcessingImages(prev => new Set(prev).add(img.id)); }); try { for (let index = 0; index < selectedImageArray.length; index++) { const image = selectedImageArray[index]; setBatchProgress({ current: index + 1, total: selectedImageArray.length }); try { const processedUrl = await removeBackgroundWithRembgAPI(image.original, rembgModel); if (processedUrl) { setImages(prev => prev.map(img => img.id === image.id ? { ...img, processed: processedUrl, useProcessed: true } : img)); } } catch {} finally { setProcessingImages(prev => { const newSet = new Set(prev); newSet.delete(image.id); return newSet; }); } } } catch {} finally { setBatchProgress(null); } }, [images, selectedImages, removeBackgroundWithRembgAPI, rembgModel]);
 
   const exportMoodBoard = useCallback(() => { console.log('Export not yet implemented'); }, []);
 
@@ -240,28 +236,21 @@ const MoodBoardApp = () => {
           const newImage: ImageType = { id: Date.now() + Math.random(), original: dataUrl, processed: null, name: file.name, useProcessed: false };
           setImages(prev => [...prev, newImage]);
           try {
-            const img = new Image();
-            img.onload = async () => {
-              try {
-                setProcessingImages(prev => new Set(prev).add(newImage.id));
-                const processedDataUrl = await removeBackground(img, { algorithm: 'ai' });
-                if (processedDataUrl) {
-                  setImages(prev => prev.map(image => image.id === newImage.id ? { ...image, processed: processedDataUrl, useProcessed: true } : image));
-                }
-              } catch {}
-              finally {
-                setProcessingImages(prev => { const s = new Set(prev); s.delete(newImage.id); return s; });
-              }
-            };
-            img.crossOrigin = 'anonymous';
-            img.src = dataUrl;
+            setProcessingImages(prev => new Set(prev).add(newImage.id));
+            const processedDataUrl = await removeBackgroundWithRembgAPI(dataUrl, rembgModel);
+            if (processedDataUrl) {
+              setImages(prev => prev.map(image => image.id === newImage.id ? { ...image, processed: processedDataUrl, useProcessed: true } : image));
+            }
           } catch {}
+          finally {
+            setProcessingImages(prev => { const s = new Set(prev); s.delete(newImage.id); return s; });
+          }
         };
         reader.readAsDataURL(file);
       }
     }
     if (event.target) event.target.value = '';
-  }, [removeBackground]);
+  }, [removeBackgroundWithRembgAPI, rembgModel]);
 
   const handleSearch = useCallback(() => { if (searchQuery.trim()) { searchFurniture(searchQuery, searchFilters); } }, [searchQuery, searchFilters, searchFurniture]);
   const clearSearch = useCallback(() => { setSearchQuery(''); setSearchResults([]); setSearchFilters({ category: 'all', priceRange: 'all', style: 'all' }); }, []);
@@ -366,8 +355,7 @@ const MoodBoardApp = () => {
                 <p className="text-gray-300 mb-4">Aggregating results from multiple retailers...</p>
                 <div className="flex flex-wrap justify-center gap-2 text-sm">
                   <span className="px-3 py-1 bg-purple-600/20 text-purple-200 rounded-full border border-purple-500/30">🛋️ Wayfair</span>
-                  <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded-full border border-blue-500/30">🏠 IKEA</span>
-                  <span className="px-3 py-1 bg-green-600/20 text-green-200 rounded-full border border-green-500/30">✨ West Elm</span>
+                  <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded-full border border-blue-500/30">🏠 Pottery Barn</span>
                 </div>
               </div>
             )}
@@ -379,9 +367,7 @@ const MoodBoardApp = () => {
                     <span>Results from: </span>
                     <span className="text-purple-300">Wayfair</span>
                     <span className="text-gray-500"> • </span>
-                    <span className="text-blue-300">IKEA</span>
-                    <span className="text-gray-500"> • </span>
-                    <span className="text-green-300">West Elm</span>
+                    <span className="text-blue-300">Pottery Barn</span>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -400,7 +386,6 @@ const MoodBoardApp = () => {
                         <h3 className="font-medium text-white mb-2 line-clamp-2">{item.title}</h3>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center space-x-2"><span className="text-lg font-bold text-green-400">{item.price}</span>{item.originalPrice && (<span className="text-sm text-gray-400 line-through">{item.originalPrice}</span>)}</div>
-                          <div className="flex items-center text-sm text-gray-300"><span className="text-yellow-400 mr-1">★</span>{item.rating} ({item.reviews})</div>
                         </div>
                         <div className="flex items-center justify-between">
                           <button onClick={() => window.open(item.url, '_blank')} className="flex items-center text-sm text-purple-400 hover:text-purple-300 transition-colors"><ExternalLink className="w-4 h-4 mr-1" />View Details</button>
@@ -420,8 +405,7 @@ const MoodBoardApp = () => {
                 <p className="text-gray-300 mb-4">Find items from major furniture retailers and add them to your mood board</p>
                 <div className="flex flex-wrap justify-center gap-2 text-sm text-gray-300">
                   <span className="px-3 py-1 bg-purple-600/20 text-purple-200 rounded border border-purple-500/30">Wayfair</span>
-                  <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded border border-blue-500/30">IKEA</span>
-                  <span className="px-3 py-1 bg-green-600/20 text-green-200 rounded border border-green-500/30">West Elm</span>
+                  <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded border border-blue-500/30">Pottery Barn</span>
                 </div>
                 <p className="text-gray-400 text-sm mt-4">Try searching: "chair", "table", "lamp", "sofa", "storage"</p>
               </div>
@@ -631,11 +615,11 @@ const MoodBoardApp = () => {
                     {images.map(image => (
                       <div key={image.id} className={`relative card-dark rounded-lg shadow-lg border-2 transition-all ${selectedImages.has(image.id) ? 'gradient-border ring-2 ring-purple-400/20' : 'hover:border-gray-500'}`}> <div className="aspect-square p-2"><img src={image.useProcessed && image.processed ? image.processed : image.original} alt={image.name} className="w-full h-full object-contain rounded cursor-pointer" onClick={() => toggleImageSelection(image.id)} /></div> <div className="absolute top-2 right-2 flex space-x-1"> {processingImages.has(image.id) && (<div className="p-1 bg-yellow-500 text-white rounded text-xs animate-pulse"><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /></div>)} {image.processed && (<button onClick={() => toggleBackgroundRemoval(image.id)} className={`p-1 rounded text-xs ${image.useProcessed ? 'bg-green-600 text-white' : 'bg-gray-600 text-white'}`} title={image.useProcessed ? 'Using AI-processed version' : 'Using original'}><RotateCcw className="w-3 h-3" /></button>)} <button onClick={() => manualBackgroundRemoval(image.id, 'ai')} disabled={processingImages.has(image.id)} className="p-1 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded text-xs hover:from-purple-700 hover:to-blue-700 disabled:opacity-50" title="Remove background (AI)"><Filter className="w-3 h-3" /></button> <button onClick={() => deleteImage(image.id)} className="p-1 bg-red-600 text-white rounded text-xs hover:bg-red-700" title="Delete image"><Trash2 className="w-3 h-3" /></button> </div> <div className="p-2 border-t border-gray-600"><p className="text-xs text-gray-300 truncate" title={image.name}>{image.name}</p>{image.searchMetadata && (<div className="flex items-center justify-between mt-1"><span className="text-lg font-bold text-green-400">{image.searchMetadata.price}</span><span className="text-sm text-gray-300">{image.searchMetadata.site}</span></div>)} </div> </div>
                     ))}
-                  </div>
+                                   </div>
                 ) : (
                   <div className="card-dark rounded-lg shadow-lg p-8">
                     <div className="flex justify-center">{currentImage && (<div className="max-w-4xl max-h-96 flex items-center justify-center"><img src={currentImage.useProcessed && currentImage.processed ? currentImage.processed : currentImage.original} alt={currentImage.name} className="max-w-full max-h-full object-contain rounded-lg" /></div>)}</div>
-                    <div className="mt-4 text-center"><h3 className="text-lg font-medium text-white">{currentImage?.name}</h3>{currentImage?.searchMetadata && (<div className="flex justify-center items-center space-x-4 mt-2"><span className="text-lg font-bold text-green-400">{currentImage.searchMetadata.price}</span><span className="text-sm text-gray-300">from {currentImage.searchMetadata.site}</span><div className="flex items-center text-sm text-gray-300"><span className="text-yellow-400 mr-1">★</span>{currentImage.searchMetadata.rating}</div></div>)}<div className="flex justify-center mt-2">{currentImage?.processed && (<button onClick={() => toggleBackgroundRemoval(currentImage.id)} className={`btn-gradient-outline ${currentImage.useProcessed ? 'text-green-400' : ''}`}>{currentImage.useProcessed ? 'Background Removed' : 'Original'}</button>)}</div></div>
+                    <div className="mt-4 text-center"><h3 className="text-lg font-medium text-white">{currentImage?.name}</h3>{currentImage?.searchMetadata && (<div className="flex justify-center items-center space-x-4 mt-2"><span className="text-lg font-bold text-green-400">{currentImage.searchMetadata.price}</span><span className="text-sm text-gray-300">from {currentImage.searchMetadata.site}</span></div>)}<div className="flex justify-center mt-2">{currentImage?.processed && (<button onClick={() => toggleBackgroundRemoval(currentImage.id)} className={`btn-gradient-outline ${currentImage.useProcessed ? 'text-green-400' : ''}`}>{currentImage.useProcessed ? 'Background Removed' : 'Original'}</button>)}</div></div>
                   </div>
                 )}
               </>
@@ -643,7 +627,6 @@ const MoodBoardApp = () => {
           </>
         )}
       </main>
-      <canvas ref={canvasRef} className="hidden" />
     </div>
   );
 };

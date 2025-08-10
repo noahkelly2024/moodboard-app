@@ -8,7 +8,6 @@ export interface ImageType {
     price: string;
     site: string;
     url: string;
-    rating: number;
   };
 }
 
@@ -43,8 +42,6 @@ export interface SearchResult {
   site: string;
   image: string;
   url: string;
-  rating: number;
-  reviews: number;
   category: string;
   style: string;
   inStock: boolean;
