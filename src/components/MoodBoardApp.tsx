@@ -24,6 +24,7 @@ const MoodBoardApp = () => {
     priceRange: 'all',
     style: 'all'
   });
+  const [sitesSearched, setSitesSearched] = useState<string[]>([]);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [draggedImage, setDraggedImage] = useState<ImageType | null>(null);
   const [isDraggingLayer, setIsDraggingLayer] = useState<string | number | null>(null);
@@ -86,6 +87,7 @@ const MoodBoardApp = () => {
           if (result.success && result.results) {
             console.log(`Search successful: ${result.results.length} results from ${result.sites_searched?.join(', ')}`);
             setSearchResults(result.results);
+            setSitesSearched(result.sites_searched || []);
             setIsSearching(false);
             return;
           }
@@ -117,10 +119,12 @@ const MoodBoardApp = () => {
           }
         });
       }
+      setSitesSearched(['Wayfair', 'Pottery Barn']);
       setSearchResults(filteredResults);
     } catch (error) {
       console.error('Search error:', error);
       setSearchResults([]);
+      setSitesSearched([]);
     } finally {
       setIsSearching(false);
     }
@@ -253,7 +257,7 @@ const MoodBoardApp = () => {
   }, [removeBackgroundWithRembgAPI, rembgModel]);
 
   const handleSearch = useCallback(() => { if (searchQuery.trim()) { searchFurniture(searchQuery, searchFilters); } }, [searchQuery, searchFilters, searchFurniture]);
-  const clearSearch = useCallback(() => { setSearchQuery(''); setSearchResults([]); setSearchFilters({ category: 'all', priceRange: 'all', style: 'all' }); }, []);
+  const clearSearch = useCallback(() => { setSearchQuery(''); setSearchResults([]); setSearchFilters({ category: 'all', priceRange: 'all', style: 'all' }); setSitesSearched([]); }, []);
   const toggleFavorite = useCallback((itemId: string) => { setFavorites(prev => { const newSet = new Set(prev); if (newSet.has(itemId)) newSet.delete(itemId); else newSet.add(itemId); return newSet; }); }, []);
   const deleteSelectedImages = useCallback(() => { const selectedIds = Array.from(selectedImages); setImages(prev => prev.filter(img => !selectedIds.includes(img.id))); setSelectedImages(new Set()); }, [selectedImages]);
   const prevSlide = useCallback(() => { if (currentSlide > 0) setCurrentSlide(currentSlide - 1); }, [currentSlide]);
@@ -356,6 +360,7 @@ const MoodBoardApp = () => {
                 <div className="flex flex-wrap justify-center gap-2 text-sm">
                   <span className="px-3 py-1 bg-purple-600/20 text-purple-200 rounded-full border border-purple-500/30">🛋️ Wayfair</span>
                   <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded-full border border-blue-500/30">🏠 Pottery Barn</span>
+                  <span className="px-3 py-1 bg-teal-600/20 text-teal-200 rounded-full border border-teal-500/30">🪑 West Elm</span>
                 </div>
               </div>
             )}
@@ -365,9 +370,11 @@ const MoodBoardApp = () => {
                   <h2 className="text-lg font-semibold text-white">Search Results ({searchResults.length})</h2>
                   <div className="text-sm text-gray-400">
                     <span>Results from: </span>
-                    <span className="text-purple-300">Wayfair</span>
-                    <span className="text-gray-500"> • </span>
-                    <span className="text-blue-300">Pottery Barn</span>
+                    {sitesSearched && sitesSearched.length > 0 ? (
+                      <span className="text-gray-300">{sitesSearched.join(' • ')}</span>
+                    ) : (
+                      <span className="text-gray-500">Multiple Retailers</span>
+                    )}
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -406,6 +413,7 @@ const MoodBoardApp = () => {
                 <div className="flex flex-wrap justify-center gap-2 text-sm text-gray-300">
                   <span className="px-3 py-1 bg-purple-600/20 text-purple-200 rounded border border-purple-500/30">Wayfair</span>
                   <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded border border-blue-500/30">Pottery Barn</span>
+                  <span className="px-3 py-1 bg-teal-600/20 text-teal-200 rounded border border-teal-500/30">West Elm</span>
                 </div>
                 <p className="text-gray-400 text-sm mt-4">Try searching: "chair", "table", "lamp", "sofa", "storage"</p>
               </div>

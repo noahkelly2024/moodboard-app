@@ -34,6 +34,13 @@ try:
 except Exception:
     pb_extract_product_info = None
 
+# NEW: Try to import West Elm API helpers
+try:
+    from west_elm import fetch_west_elm_autocomplete as we_fetch_autocomplete, extract_results as we_extract_results
+except Exception:
+    we_fetch_autocomplete = None  # type: ignore
+    we_extract_results = None  # type: ignore
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -393,6 +400,55 @@ def _adapt_pottery_barn_products(items: List[Dict[str, Any]], category: str, sty
             'price': _price_str(it.get('price')) or '$',
             'originalPrice': None,
             'site': 'Pottery Barn',
+            'image': img or '/window.svg',
+            'url': url,
+            'category': category or 'all',
+            'style': style or 'all',
+            'inStock': True,
+        })
+    return adapted
+
+# NEW: West Elm helpers (API-based)
+
+def we_get_products(query: str, num_results: int = 20) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    try:
+        if we_fetch_autocomplete and we_extract_results:
+            raw = we_fetch_autocomplete(query=query, num_suggestions=0, num_products=num_results)
+            if raw:
+                items = we_extract_results(raw, fallback_query=query, include_suggestions=False) or []
+    except Exception as e:
+        logger.warning(f"West Elm API fetch failed: {e}")
+    return items
+
+
+def _adapt_west_elm_products(items: List[Dict[str, Any]], category: str, style: str) -> List[Dict[str, Any]]:
+    adapted: List[Dict[str, Any]] = []
+    PRICE_REGEX = re.compile(r'\$\s*([0-9][0-9,]*\.?[0-9]{0,2})')
+
+    def _price_str(p):
+        if p is None:
+            return None
+        s = str(p)
+        m = PRICE_REGEX.search(s)
+        if m:
+            return f"${m.group(1)}"
+        return s if '$' in s else None
+
+    for i, it in enumerate(items or []):
+        if not isinstance(it, dict):
+            continue
+        title = (it.get('title') or '').strip()
+        if not title:
+            continue
+        url = it.get('url') or ''
+        img = it.get('image') or ''
+        adapted.append({
+            'id': f'westelm-{i+1}',
+            'title': title,
+            'price': _price_str(it.get('price')) or '$',
+            'originalPrice': None,
+            'site': 'West Elm',
             'image': img or '/window.svg',
             'url': url,
             'category': category or 'all',
@@ -1199,7 +1255,7 @@ def search_furniture_endpoint():
         
         logger.info(f"Multi-site search for: '{query}' with filters: {filters}")
 
-        # NEW: Prefer dedicated Wayfair module only (for now) — now combined with Pottery Barn
+        # NEW: Prefer dedicated Wayfair module only (for now) — now combined with Pottery Barn and West Elm
         if WAYFAIR_ONLY and wayfair_get_products is not None and not data.get('forceMultiSite'):
             try:
                 # Wayfair
@@ -1213,10 +1269,14 @@ def search_furniture_endpoint():
                 pb_items = pb_get_products(query)
                 pb_adapted = _adapt_pottery_barn_products(pb_items, category, style) if pb_items else []
 
+                # West Elm via API
+                we_items = we_get_products(query)
+                we_adapted = _adapt_west_elm_products(we_items, category, style) if we_items else []
+
                 # Combine + dedupe by URL
                 combined = []
                 seen_urls = set()
-                for lst in (wf_adapted, pb_adapted):
+                for lst in (wf_adapted, pb_adapted, we_adapted):
                     for it in lst:
                         u = it.get('url') or ''
                         if u and u in seen_urls:
@@ -1233,6 +1293,8 @@ def search_furniture_endpoint():
                         sites.append('Wayfair')
                     if pb_adapted:
                         sites.append('Pottery Barn')
+                    if we_adapted:
+                        sites.append('West Elm')
                     response = {
                         'success': True,
                         'results': final,
@@ -1245,14 +1307,15 @@ def search_furniture_endpoint():
                             'wayfairOnly': True,
                             'priceRange': [price_min, price_max],
                             'wayfair_raw_count': len(wayfair_items) if isinstance(wayfair_items, list) else None,
-                            'pb_raw_count': len(pb_items) if isinstance(pb_items, list) else None
+                            'pb_raw_count': len(pb_items) if isinstance(pb_items, list) else None,
+                            'we_raw_count': len(we_items) if isinstance(we_items, list) else None,
                         }
-                    logger.info(f"Returning {len(response['results'])} results from Wayfair + Pottery Barn modules")
+                    logger.info(f"Returning {len(response['results'])} results from Wayfair + Pottery Barn + West Elm modules")
                     return jsonify(response)
                 else:
-                    logger.warning("Wayfair+PB modules returned no adaptable items; falling back to HTML scrapers")
+                    logger.warning("Wayfair+PB+WE modules returned no adaptable items; falling back to HTML scrapers")
             except Exception as e:
-                logger.error(f"Wayfair/Pottery Barn module path failed: {e}; falling back to existing scrapers")
+                logger.error(f"Module path failed: {e}; falling back to existing scrapers")
         
         # Search all sites in parallel-ish (could use threading for better performance)
         all_results = []
@@ -1338,6 +1401,26 @@ def search_furniture_endpoint():
         except Exception as e:
             logger.error(f"Pottery Barn fetch failed: {e}")
             debug_info['pottery_barn'] = {'error': str(e)}
+
+        # NEW: Add West Elm API results to multi-site flow (in addition to HTML scraper)
+        try:
+            we_items = we_get_products(query)
+            we_adapted = _adapt_west_elm_products(we_items, category, style) if we_items else []
+            added = 0
+            for it in we_adapted:
+                if it['url'] and it['url'] in seen_urls:
+                    continue
+                if it['url']:
+                    seen_urls.add(it['url'])
+                all_results.append(it)
+                added += 1
+            if added and 'West Elm' not in sites_searched:
+                sites_searched.append('West Elm')
+            debug_info['westelm_api'] = {'raw_count': len(we_items) if isinstance(we_items, list) else None, 'adapted': len(we_adapted)}
+            logger.info(f"West Elm API returned {len(we_adapted)} results")
+        except Exception as e:
+            logger.error(f"West Elm API fetch failed: {e}")
+            debug_info['westelm_api'] = {'error': str(e)}
 
         # If no results from scraping, optional fallback
         if not all_results:
