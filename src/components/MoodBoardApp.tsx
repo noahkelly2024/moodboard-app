@@ -102,7 +102,8 @@ const MoodBoardApp = () => {
       const mockResults = [
         { id: 'fallback-wayfair-1', title: `${query} Modern Accent Chair`, price: '$299.99', originalPrice: '$399.99', site: 'Wayfair', image: 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=300&h=300&fit=crop&crop=center', url: 'https://www.wayfair.com', category: 'seating', style: 'modern', inStock: true },
         { id: 'fallback-potterybarn-1', title: `${query} Scandinavian Table`, price: '$199.00', originalPrice: null, site: 'Pottery Barn', image: 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&h=300&fit=crop&crop=center', url: 'https://www.potterybarn.com', category: 'tables', style: 'scandinavian', inStock: true },
-        { id: 'fallback-wayfair-2', title: `${query} Mid-Century Lamp`, price: '$179.00', originalPrice: '$229.00', site: 'Wayfair', image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=center', url: 'https://www.wayfair.com', category: 'lighting', style: 'mid-century', inStock: true }
+        { id: 'fallback-wayfair-2', title: `${query} Mid-Century Lamp`, price: '$179.00', originalPrice: '$229.00', site: 'Wayfair', image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=center', url: 'https://www.wayfair.com', category: 'lighting', style: 'mid-century', inStock: true },
+        { id: 'fallback-raymourflanigan-1', title: `${query} Cozy Fabric Sofa`, price: '$899.00', originalPrice: null, site: 'Raymour & Flanigan', image: 'https://images.unsplash.com/photo-1549187774-b4e9b0445b41?w=300&h=300&fit=crop&crop=center', url: 'https://www.raymourflanigan.com', category: 'seating', style: 'contemporary', inStock: true }
       ];
       let filteredResults = mockResults.filter(item => item.title.toLowerCase().includes(query.toLowerCase()) || item.category.includes(query.toLowerCase()) || item.style.includes(query.toLowerCase()));
       if (filters.category !== 'all') filteredResults = filteredResults.filter(item => item.category === filters.category);
@@ -119,7 +120,7 @@ const MoodBoardApp = () => {
           }
         });
       }
-      setSitesSearched(['Wayfair', 'Pottery Barn']);
+      setSitesSearched(['Wayfair', 'Pottery Barn', 'Raymour & Flanigan']);
       setSearchResults(filteredResults);
     } catch (error) {
       console.error('Search error:', error);
@@ -361,6 +362,7 @@ const MoodBoardApp = () => {
                   <span className="px-3 py-1 bg-purple-600/20 text-purple-200 rounded-full border border-purple-500/30">🛋️ Wayfair</span>
                   <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded-full border border-blue-500/30">🏠 Pottery Barn</span>
                   <span className="px-3 py-1 bg-teal-600/20 text-teal-200 rounded-full border border-teal-500/30">🪑 West Elm</span>
+                  <span className="px-3 py-1 bg-indigo-600/20 text-indigo-200 rounded-full border border-indigo-500/30">🛏️ Raymour & Flanigan</span>
                 </div>
               </div>
             )}
@@ -414,6 +416,7 @@ const MoodBoardApp = () => {
                   <span className="px-3 py-1 bg-purple-600/20 text-purple-200 rounded border border-purple-500/30">Wayfair</span>
                   <span className="px-3 py-1 bg-blue-600/20 text-blue-200 rounded border border-blue-500/30">Pottery Barn</span>
                   <span className="px-3 py-1 bg-teal-600/20 text-teal-200 rounded border border-teal-500/30">West Elm</span>
+                  <span className="px-3 py-1 bg-indigo-600/20 text-indigo-200 rounded border border-indigo-500/30">Raymour & Flanigan</span>
                 </div>
                 <p className="text-gray-400 text-sm mt-4">Try searching: "chair", "table", "lamp", "sofa", "storage"</p>
               </div>

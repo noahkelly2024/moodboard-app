@@ -41,6 +41,13 @@ except Exception:
     we_fetch_autocomplete = None  # type: ignore
     we_extract_results = None  # type: ignore
 
+# NEW: Try to import Raymour & Flanigan API helpers
+try:
+    from raymour_flanigan import fetch_raymour_flanigan_autocomplete as rf_fetch_autocomplete, extract_results as rf_extract_results
+except Exception:
+    rf_fetch_autocomplete = None  # type: ignore
+    rf_extract_results = None  # type: ignore
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -88,6 +95,8 @@ def _referer_for_url(url: str) -> str | None:
         return 'https://www.ikea.com/'
     if 'westelm' in netloc or 'west-elm' in netloc:
         return 'https://www.westelm.com/'
+    if 'raymourflanigan' in netloc:
+        return 'https://www.raymourflanigan.com/'
     return None
 
 def base64_to_image(base64_string):
@@ -449,6 +458,55 @@ def _adapt_west_elm_products(items: List[Dict[str, Any]], category: str, style: 
             'price': _price_str(it.get('price')) or '$',
             'originalPrice': None,
             'site': 'West Elm',
+            'image': img or '/window.svg',
+            'url': url,
+            'category': category or 'all',
+            'style': style or 'all',
+            'inStock': True,
+        })
+    return adapted
+
+# NEW: Raymour & Flanigan helpers (API-based)
+
+def rf_get_products(query: str, num_results: int = 20) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    try:
+        if rf_fetch_autocomplete and rf_extract_results:
+            raw = rf_fetch_autocomplete(query=query, num_suggestions=0, num_products=num_results)
+            if raw:
+                items = rf_extract_results(raw, fallback_query=query, include_suggestions=False) or []
+    except Exception as e:
+        logger.warning(f"Raymour & Flanigan API fetch failed: {e}")
+    return items
+
+
+def _adapt_raymour_flanigan_products(items: List[Dict[str, Any]], category: str, style: str) -> List[Dict[str, Any]]:
+    adapted: List[Dict[str, Any]] = []
+    PRICE_REGEX = re.compile(r'\$\s*([0-9][0-9,]*\.?[0-9]{0,2})')
+
+    def _price_str(p):
+        if p is None:
+            return None
+        s = str(p)
+        m = PRICE_REGEX.search(s)
+        if m:
+            return f"${m.group(1)}"
+        return s if '$' in s else None
+
+    for i, it in enumerate(items or []):
+        if not isinstance(it, dict):
+            continue
+        title = (it.get('title') or '').strip()
+        if not title:
+            continue
+        url = it.get('url') or ''
+        img = it.get('image') or ''
+        adapted.append({
+            'id': f'raymourflanigan-{i+1}',
+            'title': title,
+            'price': _price_str(it.get('price')) or '$',
+            'originalPrice': None,
+            'site': 'Raymour & Flanigan',
             'image': img or '/window.svg',
             'url': url,
             'category': category or 'all',
@@ -1183,6 +1241,8 @@ def _site_name_from_url(url: str) -> str:
         return 'IKEA'
     if 'westelm' in netloc or 'west-elm' in netloc:
         return 'West Elm'
+    if 'raymourflanigan' in netloc:
+        return 'Raymour & Flanigan'
     return netloc.split(':')[0]
 
 # Restored helper
@@ -1273,10 +1333,14 @@ def search_furniture_endpoint():
                 we_items = we_get_products(query)
                 we_adapted = _adapt_west_elm_products(we_items, category, style) if we_items else []
 
+                # Raymour & Flanigan via API
+                rf_items = rf_get_products(query)
+                rf_adapted = _adapt_raymour_flanigan_products(rf_items, category, style) if rf_items else []
+
                 # Combine + dedupe by URL
                 combined = []
                 seen_urls = set()
-                for lst in (wf_adapted, pb_adapted, we_adapted):
+                for lst in (wf_adapted, pb_adapted, we_adapted, rf_adapted):
                     for it in lst:
                         u = it.get('url') or ''
                         if u and u in seen_urls:
@@ -1295,6 +1359,8 @@ def search_furniture_endpoint():
                         sites.append('Pottery Barn')
                     if we_adapted:
                         sites.append('West Elm')
+                    if rf_adapted:
+                        sites.append('Raymour & Flanigan')
                     response = {
                         'success': True,
                         'results': final,
@@ -1309,11 +1375,12 @@ def search_furniture_endpoint():
                             'wayfair_raw_count': len(wayfair_items) if isinstance(wayfair_items, list) else None,
                             'pb_raw_count': len(pb_items) if isinstance(pb_items, list) else None,
                             'we_raw_count': len(we_items) if isinstance(we_items, list) else None,
+                            'rf_raw_count': len(rf_items) if isinstance(rf_items, list) else None,
                         }
-                    logger.info(f"Returning {len(response['results'])} results from Wayfair + Pottery Barn + West Elm modules")
+                    logger.info(f"Returning {len(response['results'])} results from Wayfair + Pottery Barn + West Elm + Raymour & Flanigan modules")
                     return jsonify(response)
                 else:
-                    logger.warning("Wayfair+PB+WE modules returned no adaptable items; falling back to HTML scrapers")
+                    logger.warning("Wayfair+PB+WE+RF modules returned no adaptable items; falling back to HTML scrapers")
             except Exception as e:
                 logger.error(f"Module path failed: {e}; falling back to existing scrapers")
         
@@ -1326,7 +1393,7 @@ def search_furniture_endpoint():
         # Optional SerpAPI first for more reliable results
         if SERPAPI_KEY:
             serp_debug = {}
-            for domain in ['wayfair.com', 'ikea.com', 'westelm.com']:
+            for domain in ['wayfair.com', 'ikea.com', 'westelm.com', 'raymourflanigan.com']:
                 serp_results, sd = _search_serpapi_for_domain(query, domain, price_min, price_max, category, style, limit=12)
                 serp_debug[domain] = sd
                 added = 0
@@ -1421,6 +1488,26 @@ def search_furniture_endpoint():
         except Exception as e:
             logger.error(f"West Elm API fetch failed: {e}")
             debug_info['westelm_api'] = {'error': str(e)}
+
+        # NEW: Add Raymour & Flanigan API results to multi-site flow
+        try:
+            rf_items = rf_get_products(query)
+            rf_adapted = _adapt_raymour_flanigan_products(rf_items, category, style) if rf_items else []
+            added = 0
+            for it in rf_adapted:
+                if it['url'] and it['url'] in seen_urls:
+                    continue
+                if it['url']:
+                    seen_urls.add(it['url'])
+                all_results.append(it)
+                added += 1
+            if added:
+                sites_searched.append('Raymour & Flanigan')
+            debug_info['raymour_flanigan'] = {'raw_count': len(rf_items) if isinstance(rf_items, list) else None, 'adapted': len(rf_adapted)}
+            logger.info(f"Raymour & Flanigan returned {len(rf_adapted)} results")
+        except Exception as e:
+            logger.error(f"Raymour & Flanigan API fetch failed: {e}")
+            debug_info['raymour_flanigan'] = {'error': str(e)}
 
         # If no results from scraping, optional fallback
         if not all_results:
