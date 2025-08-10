@@ -9,12 +9,24 @@ import logging
 import re
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 import random
 import time
 from typing import Dict, Any, List
 import os  # added for env flag
 import json  # NEW
+
+# Try to import decoupled real search module
+try:
+    from search_furniture_real import search_furniture_real  # NEW
+except Exception:
+    search_furniture_real = None  # NEW: fallback if module not available
+
+# NEW: Try to import dedicated Wayfair module implementation
+try:
+    from wayfair import get_products as wayfair_get_products
+except Exception:
+    wayfair_get_products = None
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -451,9 +463,491 @@ def scrape_wayfair(query: str, price_min, price_max, category: str, style: str):
         debug_meta['exception'] = str(e)
     return results, debug_meta
 
-@app.route('/search', methods=['POST'])
-def furniture_search():
-    """Furniture search (Wayfair only refactor). Returns JSON list of results.
+def scrape_ikea(query: str, price_min, price_max, category: str, style: str):
+    """Scrape IKEA for furniture items."""
+    results = []
+    debug_meta = {}
+    try:
+        ikea_url = f"https://www.ikea.com/us/en/search/products/?q={quote_plus(query)}"
+        resp = requests.get(
+            ikea_url,
+            timeout=TIMEOUT,
+            headers=_pick_headers(),
+            allow_redirects=True,
+        )
+        debug_meta['status_code'] = resp.status_code
+        if not resp.ok:
+            logger.warning(f"IKEA request failed: {resp.status_code}")
+            return results, debug_meta
+            
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # IKEA product selectors
+        def _class_has_product(x):
+            if not x:
+                return False
+            if isinstance(x, (list, tuple, set)):
+                s = ' '.join(x).lower()
+            else:
+                s = str(x).lower()
+            return 'product' in s
+        product_cards = soup.find_all(['div', 'article'], class_=_class_has_product)
+        if not product_cards:
+            # Fallback selectors
+            product_cards = soup.find_all('a', href=lambda x: x and '/products/' in x)[:MAX_PER_SITE]
+        
+        logger.info(f"IKEA candidate cards found: {len(product_cards)} for query '{query}'")
+        debug_meta['candidate_cards'] = len(product_cards)
+        
+        for card in product_cards:
+            if len(results) >= MAX_PER_SITE:
+                break
+                
+            # Extract title (use CSS selectors)
+            title = None
+            title_selectors = ['h3', 'h2', 'span[class*="name"]', '[data-testid*="name"]']
+            for sel in title_selectors:
+                title_el = card.select_one(sel)
+                if title_el and title_el.get_text(strip=True):
+                    title = title_el.get_text(strip=True)
+                    break
+            
+            if not title:
+                # Try aria-label or alt text
+                title = card.get('aria-label') or card.get('title')
+                if not title:
+                    img = card.find('img')
+                    if img:
+                        title = img.get('alt')
+            
+            if not title:
+                continue
+                
+            # Extract price
+            price_val = None
+            price_selectors = ['span[class*="price"]', '[data-testid*="price"]', 'span', 'div']
+            for sel in price_selectors:
+                price_el = card.select_one(sel)
+                if price_el:
+                    price_text = price_el.get_text()
+                    price_match = PRICE_REGEX.search(price_text)
+                    if price_match:
+                        try:
+                            price_val = float(price_match.group(1).replace(',', ''))
+                            break
+                        except ValueError:
+                            continue
+            
+            if not price_in_range(price_val, price_min, price_max):
+                continue
+                
+            # Extract image
+            image_url = None
+            img = card.find('img')
+            if img:
+                for attr in IMAGE_ATTRS:
+                    val = img.get(attr)
+                    if val:
+                        if val.startswith('//'):
+                            image_url = 'https:' + val
+                        elif val.startswith('/'):
+                            image_url = 'https://www.ikea.com' + val
+                        else:
+                            image_url = val
+                        break
+            
+            # Extract URL
+            product_url = ikea_url
+            if card.name == 'a':
+                href = card.get('href')
+                if href:
+                    if href.startswith('/'):
+                        product_url = 'https://www.ikea.com' + href
+                    elif href.startswith('http'):
+                        product_url = href
+            else:
+                link = card.find('a', href=True)
+                if link:
+                    href = link['href']
+                    if href.startswith('/'):
+                        product_url = 'https://www.ikea.com' + href
+                    elif href.startswith('http'):
+                        product_url = href
+            
+            results.append(make_result('ikea', len(results), title, price_val, 'IKEA', image_url, product_url, category, style))
+        
+        # JSON fallbacks similar to Wayfair
+        json_products_used = 0
+        if not results:
+            ld_products = _json_products_from_ldjson(soup)
+            for p in ld_products:
+                if len(results) >= MAX_PER_SITE:
+                    break
+                if not p.get('name'):
+                    continue
+                price_val = p.get('price')
+                if not price_in_range(price_val, price_min, price_max):
+                    continue
+                url = p.get('url')
+                if url and url.startswith('/'):
+                    url = 'https://www.ikea.com' + url
+                results.append(make_result('ikea', len(results), p['name'], price_val, 'IKEA', p.get('image'), url or ikea_url, category, style))
+                json_products_used += 1
+        if not results:
+            inline_products = _json_products_from_inline(soup)
+            for p in inline_products:
+                if len(results) >= MAX_PER_SITE:
+                    break
+                if not p.get('name'):
+                    continue
+                price_val = p.get('price')
+                if not price_in_range(price_val, price_min, price_max):
+                    continue
+                results.append(make_result('ikea', len(results), p['name'], price_val, 'IKEA', p.get('image'), ikea_url, category, style))
+                json_products_used += 1
+        debug_meta['json_products_used'] = json_products_used
+
+        # Alt/IMG fallback
+        if not results:
+            alts = []
+            lowered_query = query.lower()
+            for img in soup.find_all('img'):
+                alt = (img.get('alt') or '').strip()
+                if len(alt) > 5 and lowered_query.split()[0] in alt.lower():
+                    src = None
+                    for attr in IMAGE_ATTRS:
+                        val = img.get(attr)
+                        if val:
+                            src = val
+                            break
+                    alts.append((alt, src))
+            for alt, img_url in alts[:MAX_PER_SITE]:
+                results.append(make_result('ikea', len(results), alt, None, 'IKEA', img_url, ikea_url, category, style))
+            debug_meta['alt_fallback_used'] = len(results)
+
+        if not results:
+            snippet = resp.text[:2000].replace('\n', ' ') if resp.text else ''
+            logger.info(f"IKEA parse produced zero results. HTML snippet: {snippet}")
+            debug_meta['html_snippet'] = snippet
+            
+    except Exception as e:
+        logger.warning(f"IKEA scrape failed: {e}")
+        debug_meta['exception'] = str(e)
+    
+    return results, debug_meta
+
+def scrape_westelm(query: str, price_min, price_max, category: str, style: str):
+    """Scrape West Elm for furniture items."""
+    results = []
+    debug_meta = {}
+    try:
+        westelm_url = f"https://www.westelm.com/search/results.html?words={quote_plus(query)}"
+        resp = requests.get(
+            westelm_url,
+            timeout=TIMEOUT,
+            headers=_pick_headers(),
+            allow_redirects=True,
+        )
+        debug_meta['status_code'] = resp.status_code
+        if not resp.ok:
+            logger.warning(f"West Elm request failed: {resp.status_code}")
+            return results, debug_meta
+            
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        
+        # West Elm product selectors
+        def _class_has_product(x):
+            if not x:
+                return False
+            if isinstance(x, (list, tuple, set)):
+                s = ' '.join(x).lower()
+            else:
+                s = str(x).lower()
+            return 'product' in s or 'grid' in s
+        product_cards = soup.find_all(['div', 'article'], class_=_class_has_product)
+        if not product_cards:
+            # Fallback selectors
+            product_cards = soup.find_all('a', href=lambda x: x and '/products/' in x)[:MAX_PER_SITE]
+        
+        logger.info(f"West Elm candidate cards found: {len(product_cards)} for query '{query}'")
+        debug_meta['candidate_cards'] = len(product_cards)
+        
+        for card in product_cards:
+            if len(results) >= MAX_PER_SITE:
+                break
+                
+            # Extract title
+            title = None
+            title_selectors = ['h3', 'h2', 'span[class*="name"]', '[class*="title"]']
+            for sel in title_selectors:
+                title_el = card.select_one(sel)
+                if title_el and title_el.get_text(strip=True):
+                    title = title_el.get_text(strip=True)
+                    break
+            
+            if not title:
+                title = card.get('aria-label') or card.get('title')
+                if not title:
+                    img = card.find('img')
+                    if img:
+                        title = img.get('alt')
+            
+            if not title:
+                continue
+                
+            # Extract price
+            price_val = None
+            price_selectors = ['span[class*="price"]', '[class*="price"]', 'span', 'div']
+            for sel in price_selectors:
+                price_el = card.select_one(sel)
+                if price_el:
+                    price_text = price_el.get_text()
+                    price_match = PRICE_REGEX.search(price_text)
+                    if price_match:
+                        try:
+                            price_val = float(price_match.group(1).replace(',', ''))
+                            break
+                        except ValueError:
+                            continue
+            
+            if not price_in_range(price_val, price_min, price_max):
+                continue
+                
+            # Extract image
+            image_url = None
+            img = card.find('img')
+            if img:
+                for attr in IMAGE_ATTRS:
+                    val = img.get(attr)
+                    if val:
+                        if val.startswith('//'):
+                            image_url = 'https:' + val
+                        elif val.startswith('/'):
+                            image_url = 'https://www.westelm.com' + val
+                        else:
+                            image_url = val
+                        break
+            
+            # Extract URL
+            product_url = westelm_url
+            if card.name == 'a':
+                href = card.get('href')
+                if href:
+                    if href.startswith('/'):
+                        product_url = 'https://www.westelm.com' + href
+                    elif href.startswith('http'):
+                        product_url = href
+            else:
+                link = card.find('a', href=True)
+                if link:
+                    href = link['href']
+                    if href.startswith('/'):
+                        product_url = 'https://www.westelm.com' + href
+                    elif href.startswith('http'):
+                        product_url = href
+            
+            results.append(make_result('westelm', len(results), title, price_val, 'West Elm', image_url, product_url, category, style))
+        
+        # JSON fallbacks
+        json_products_used = 0
+        if not results:
+            ld_products = _json_products_from_ldjson(soup)
+            for p in ld_products:
+                if len(results) >= MAX_PER_SITE:
+                    break
+                if not p.get('name'):
+                    continue
+                price_val = p.get('price')
+                if not price_in_range(price_val, price_min, price_max):
+                    continue
+                url = p.get('url')
+                if url and url.startswith('/'):
+                    url = 'https://www.westelm.com' + url
+                results.append(make_result('westelm', len(results), p['name'], price_val, 'West Elm', p.get('image'), url or westelm_url, category, style))
+                json_products_used += 1
+        if not results:
+            inline_products = _json_products_from_inline(soup)
+            for p in inline_products:
+                if len(results) >= MAX_PER_SITE:
+                    break
+                if not p.get('name'):
+                    continue
+                price_val = p.get('price')
+                if not price_in_range(price_val, price_min, price_max):
+                    continue
+                results.append(make_result('westelm', len(results), p['name'], price_val, 'West Elm', p.get('image'), westelm_url, category, style))
+                json_products_used += 1
+        debug_meta['json_products_used'] = json_products_used
+
+        # Alt/IMG fallback
+        if not results:
+            alts = []
+            lowered_query = query.lower()
+            for img in soup.find_all('img'):
+                alt = (img.get('alt') or '').strip()
+                if len(alt) > 5 and lowered_query.split()[0] in alt.lower():
+                    src = None
+                    for attr in IMAGE_ATTRS:
+                        val = img.get(attr)
+                        if val:
+                            src = val
+                            break
+                    alts.append((alt, src))
+            for alt, img_url in alts[:MAX_PER_SITE]:
+                results.append(make_result('westelm', len(results), alt, None, 'West Elm', img_url, westelm_url, category, style))
+            debug_meta['alt_fallback_used'] = len(results)
+
+        if not results:
+            snippet = resp.text[:2000].replace('\n', ' ') if resp.text else ''
+            logger.info(f"West Elm parse produced zero results. HTML snippet: {snippet}")
+            debug_meta['html_snippet'] = snippet
+            
+    except Exception as e:
+        logger.warning(f"West Elm scrape failed: {e}")
+        debug_meta['exception'] = str(e)
+    
+    return results, debug_meta
+
+def get_fallback_results(query: str, category: str, style: str) -> List[Dict[str, Any]]:
+    """Generate fallback results when scraping fails."""
+    base_prices = [199, 299, 399, 499, 599, 799, 999]
+    
+    fallback_items = [
+        {
+            'title': f'{query.title()} Modern Accent Chair',
+            'site': 'Wayfair',
+            'image': 'https://images.unsplash.com/photo-1586023492125-27b2c045efd7?w=300&h=300&fit=crop&crop=center',
+            'url': 'https://www.wayfair.com',
+            'category': 'seating',
+            'style': 'modern'
+        },
+        {
+            'title': f'{query.title()} Scandinavian Table',
+            'site': 'IKEA',
+            'image': 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&h=300&fit=crop&crop=center',
+            'url': 'https://www.ikea.com',
+            'category': 'tables',
+            'style': 'scandinavian'
+        },
+        {
+            'title': f'{query.title()} Mid-Century Floor Lamp',
+            'site': 'West Elm',
+            'image': 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&h=300&fit=crop&crop=center',
+            'url': 'https://www.westelm.com',
+            'category': 'lighting',
+            'style': 'mid-century'
+        },
+        {
+            'title': f'{query.title()} Industrial Bookshelf',
+            'site': 'CB2',
+            'image': 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=300&h=300&fit=crop&crop=center',
+            'url': 'https://www.cb2.com',
+            'category': 'storage',
+            'style': 'industrial'
+        },
+        {
+            'title': f'{query.title()} Contemporary Sofa',
+            'site': 'Pottery Barn',
+            'image': 'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=300&h=300&fit=crop&crop=center',
+            'url': 'https://www.potterybarn.com',
+            'category': 'seating',
+            'style': 'contemporary'
+        }
+    ]
+    
+    results = []
+    for i, item in enumerate(fallback_items):
+        price_val = random.choice(base_prices)
+        results.append(make_result(f'fallback-{item["site"].lower()}', i, item['title'], price_val, item['site'], item['image'], item['url'], item['category'], item['style']))
+    
+    return results[:6]  # Return up to 6 fallback results
+
+SERPAPI_KEY = os.getenv('SERPAPI_KEY')
+DISABLE_SEARCH_FALLBACK = os.getenv('DISABLE_SEARCH_FALLBACK') == '1'
+# Default to using the decoupled real search module when it is available, unless explicitly disabled via env
+_env_use_real = os.getenv('USE_REAL_SEARCH_MODULE')
+USE_REAL_SEARCH_MODULE = (search_furniture_real is not None) if _env_use_real is None else (_env_use_real == '1')  # UPDATED
+# NEW: Flag to route searches to Wayfair module only (default on for now)
+WAYFAIR_ONLY = os.getenv('WAYFAIR_ONLY', '1') == '1'
+
+# --- SerpAPI helpers (optional real results) ---
+
+def _parse_price_to_float(price_str: str):
+    if not price_str:
+        return None
+    try:
+        m = PRICE_REGEX.search(price_str)
+        if m:
+            return float(m.group(1).replace(',', ''))
+        # Fallback: digits only
+        return float(re.sub(r'[^0-9.]+' , '', price_str))
+    except Exception:
+        return None
+
+def _site_name_from_url(url: str) -> str:
+    try:
+        netloc = urlparse(url).netloc.lower()
+    except Exception:
+        return 'Unknown'
+    if 'wayfair' in netloc:
+        return 'Wayfair'
+    if 'ikea' in netloc:
+        return 'IKEA'
+    if 'westelm' in netloc or 'west-elm' in netloc:
+        return 'West Elm'
+    return netloc.split(':')[0]
+
+# Restored helper
+
+def _search_serpapi_for_domain(query: str, domain: str, price_min, price_max, category: str, style: str, limit: int = 10):
+    results = []
+    debug = {}
+    if not SERPAPI_KEY:
+        debug['skipped'] = 'no_api_key'
+        return results, debug
+    try:
+        params = {
+            'engine': 'google_shopping',
+            'q': f"site:{domain} {query}",
+            'hl': 'en',
+            'gl': 'us',
+            'api_key': SERPAPI_KEY,
+            'num': max(limit, MAX_PER_SITE)
+        }
+        r = requests.get('https://serpapi.com/search.json', params=params, timeout=TIMEOUT)
+        debug['status_code'] = r.status_code
+        if not r.ok:
+            debug['error'] = f"HTTP {r.status_code}"
+            return results, debug
+        data = r.json()
+        items = data.get('shopping_results') or []
+        debug['raw_count'] = len(items)
+        for it in items:
+            if len(results) >= MAX_PER_SITE:
+                break
+            title = it.get('title')
+            link = it.get('link') or it.get('product_link')
+            if not title or not link:
+                continue
+            price_val = _parse_price_to_float(it.get('price') or it.get('extracted_price'))
+            if not price_in_range(price_val, price_min, price_max):
+                continue
+            image = it.get('thumbnail') or it.get('image')
+            site = _site_name_from_url(link)
+            # Normalize domain restriction
+            if domain not in (urlparse(link).netloc or ''):
+                # Some results may be aggregated; skip if not in domain
+                if domain not in link:
+                    continue
+            results.append(make_result(domain.split('.')[0], len(results), title, price_val, site, image, link, category, style))
+        return results, debug
+    except Exception as e:
+        debug['exception'] = str(e)
+        return results, debug
+
+@app.route('/search-furniture', methods=['POST'])
+def search_furniture_endpoint():
+    """Multi-site furniture search aggregating results from Wayfair, IKEA, and West Elm.
     WARNING: Demo scraping only; respect site ToS and robots.txt for production use.
     """
     try:
@@ -463,43 +957,277 @@ def furniture_search():
         price_range = filters.get('priceRange', 'all')
         style = filters.get('style', 'all')
         category = filters.get('category', 'all')
-        debug_flag = data.get('debug') or os.getenv('WAYFAIR_DEBUG') == '1'
+        debug_flag = data.get('debug') or os.getenv('SEARCH_DEBUG') == '1'
+        no_fallback = data.get('noFallback') or DISABLE_SEARCH_FALLBACK
 
         if not query:
             return jsonify({'success': True, 'results': []})
 
         price_min, price_max = PRICE_RANGE_MAP.get(price_range, (None, None))
+        
+        logger.info(f"Multi-site search for: '{query}' with filters: {filters}")
 
-        # Wayfair scrape only
-        results, debug_meta = scrape_wayfair(query, price_min, price_max, category, style)
+        # NEW: Prefer dedicated Wayfair module only (for now)
+        if WAYFAIR_ONLY and wayfair_get_products is not None and not data.get('forceMultiSite'):
+            try:
+                # Support both signatures get_products(query) and get_products(query=...)
+                try:
+                    wayfair_items = wayfair_get_products(query)
+                except TypeError:
+                    wayfair_items = wayfair_get_products(query=query)
+                # Optional: filter by price range here if the module didn't
+                try:
+                    adapted = _adapt_wayfair_products(wayfair_items, category, style)
+                except NameError:
+                    # Inline fallback adapter if function not yet defined in some envs
+                    adapted = []
+                    if isinstance(wayfair_items, list):
+                        for i, it in enumerate(wayfair_items):
+                            if not isinstance(it, dict):
+                                continue
+                            title = (it.get('title') or '').strip()
+                            if not title:
+                                continue
+                            # price and rating handling similar to adapter above
+                            price_match = PRICE_REGEX.search(str(it.get('price') or ''))
+                            price_str = f"${price_match.group(1)}" if price_match else (str(it.get('price')) if '$' in str(it.get('price')) else '$')
+                            try:
+                                rating_val = float(it.get('star_rating')) if it.get('star_rating') not in (None, '', 'N/A') else None
+                            except Exception:
+                                rating_val = None
+                            try:
+                                rv = it.get('reviews')
+                                rv_num = int(re.findall(r'[0-9,]+', str(rv))[0].replace(',', '')) if rv is not None else None
+                            except Exception:
+                                rv_num = None
+                            adapted.append({
+                                'id': f'wayfair-{i+1}',
+                                'title': title,
+                                'price': price_str,
+                                'originalPrice': None,
+                                'site': 'Wayfair',
+                                'image': '/window.svg',
+                                'url': it.get('url') or '',
+                                'rating': rating_val,
+                                'reviews': rv_num,
+                                'category': category or 'all',
+                                'style': style or 'all',
+                                'inStock': True,
+                            })
+                if adapted:
+                    response = {
+                        'success': True,
+                        'results': adapted[:20],
+                        'total': len(adapted[:20]),
+                        'query': query,
+                        'sites_searched': ['Wayfair']
+                    }
+                    if debug_flag:
+                        response['debug'] = {
+                            'wayfairOnly': True,
+                            'priceRange': [price_min, price_max],
+                            'rawCount': len(wayfair_items) if isinstance(wayfair_items, list) else None
+                        }
+                    logger.info(f"Returning {len(response['results'])} results from Wayfair module")
+                    return jsonify(response)
+                else:
+                    logger.warning("Wayfair module returned no adaptable items; falling back to existing scrapers")
+            except Exception as e:
+                logger.error(f"Wayfair module failed: {e}; falling back to existing scrapers")
+        
+        # Search all sites in parallel-ish (could use threading for better performance)
+        all_results = []
+        debug_info = {}
+        sites_searched = []
+        seen_urls = set()
 
-        response = {'success': True, 'results': results, 'sourceCount': 1}
+        # Optional SerpAPI first for more reliable results
+        if SERPAPI_KEY:
+            serp_debug = {}
+            for domain in ['wayfair.com', 'ikea.com', 'westelm.com']:
+                serp_results, sd = _search_serpapi_for_domain(query, domain, price_min, price_max, category, style, limit=12)
+                serp_debug[domain] = sd
+                added = 0
+                for item in serp_results:
+                    if item['url'] in seen_urls:
+                        continue
+                    seen_urls.add(item['url'])
+                    all_results.append(item)
+                    added += 1
+                if added:
+                    sites_searched.append(_site_name_from_url(f'https://{domain}'))
+            debug_info['serpapi'] = {**serp_debug, 'used': True}
+        else:
+            debug_info['serpapi'] = {'used': False}
+        
+        # Also try HTML scrapers to supplement results
+        try:
+            wayfair_results, wayfair_debug = scrape_wayfair(query, price_min, price_max, category, style)
+            for it in wayfair_results:
+                if it['url'] not in seen_urls:
+                    seen_urls.add(it['url'])
+                    all_results.append(it)
+            sites_searched.append('Wayfair')
+            debug_info['wayfair'] = wayfair_debug
+            logger.info(f"Wayfair returned {len(wayfair_results)} results")
+        except Exception as e:
+            logger.error(f"Wayfair search failed: {e}")
+            debug_info['wayfair'] = {'error': str(e)}
+        
+        try:
+            ikea_results, ikea_debug = scrape_ikea(query, price_min, price_max, category, style)
+            for it in ikea_results:
+                if it['url'] not in seen_urls:
+                    seen_urls.add(it['url'])
+                    all_results.append(it)
+            sites_searched.append('IKEA')
+            debug_info['ikea'] = ikea_debug
+            logger.info(f"IKEA returned {len(ikea_results)} results")
+        except Exception as e:
+            logger.error(f"IKEA search failed: {e}")
+            debug_info['ikea'] = {'error': str(e)}
+            
+        try:
+            westelm_results, westelm_debug = scrape_westelm(query, price_min, price_max, category, style)
+            for it in westelm_results:
+                if it['url'] not in seen_urls:
+                    seen_urls.add(it['url'])
+                    all_results.append(it)
+            sites_searched.append('West Elm')
+            debug_info['westelm'] = westelm_debug
+            logger.info(f"West Elm returned {len(westelm_results)} results")
+        except Exception as e:
+            logger.error(f"West Elm search failed: {e}")
+            debug_info['westelm'] = {'error': str(e)}
+
+        # If no results from scraping, optional fallback
+        if not all_results:
+            logger.warning("No results from scrapers/SerpAPI")
+            if not no_fallback:
+                logger.warning("Using fallback results")
+                all_results = get_fallback_results(query, category, style)
+                sites_searched = ['Fallback Data']
+
+        # Shuffle results to mix sites
+        random.shuffle(all_results)
+        
+        # Limit total results
+        final_results = all_results[:20]
+
+        response = {
+            'success': True, 
+            'results': final_results,
+            'total': len(final_results),
+            'query': query,
+            'sites_searched': sites_searched
+        }
+        
         if debug_flag:
             response['debug'] = {
-                'resultCount': len(results),
+                'resultCount': len(final_results),
                 'priceRange': [price_min, price_max],
                 'query': query,
-                'meta': debug_meta
+                'sitesAttempted': len(debug_info),
+                'siteDebug': debug_info
             }
+            
+        logger.info(f"Returning {len(final_results)} total results from {len(sites_searched)} sites")
         return jsonify(response)
+        
     except Exception as e:
         logger.error(f"Search failed: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# Removed duplicate - using the existing comprehensive search implementation above
+# NEW: Adapter for dedicated Wayfair module results (moved above usage)
+def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: str) -> List[Dict[str, Any]]:
+    """Convert results from python-backend/wayfair.get_products() into app schema.
+    Expected input item keys: title, price, reviews, star_rating, url
+    Output schema keys: id, title, price, originalPrice, site, image, url, rating, reviews, category, style, inStock
+    """
+    adapted: List[Dict[str, Any]] = []
+
+    if not isinstance(items, list):
+        return adapted
+
+    def _extract_price_str(p):
+        if p is None:
+            return None
+        s = str(p)
+        # Try regex for $123.45
+        m = PRICE_REGEX.search(s)
+        if m:
+            return f"${m.group(1)}"
+        # Fallback: return original if it already looks like a price
+        return s if '$' in s else None
+
+    def _extract_price_float(p):
+        try:
+            m = PRICE_REGEX.search(str(p))
+            if not m:
+                return None
+            return float(m.group(1).replace(',', ''))
+        except Exception:
+            return None
+
+    def _extract_reviews(rv):
+        try:
+            # Accept formats like "(123)", "123 reviews", "1,234"
+            nums = re.findall(r'[0-9,]+', str(rv))
+            if not nums:
+                return None
+            return int(nums[0].replace(',', ''))
+        except Exception:
+            return None
+
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        title = (it.get('title') or '').strip()
+        if not title:
+            continue
+        url = it.get('url') or ''
+        price_str = _extract_price_str(it.get('price'))
+        price_val = _extract_price_float(it.get('price'))
+        rating_raw = it.get('star_rating')
+        try:
+            rating = float(rating_raw) if rating_raw not in (None, '', 'N/A') else None
+        except Exception:
+            rating = None
+        reviews = _extract_reviews(it.get('reviews'))
+
+        adapted.append({
+            'id': f'wayfair-{i+1}',
+            'title': title,
+            'price': price_str or (f"${price_val:.2f}" if isinstance(price_val, float) else None) or '$',
+            'originalPrice': None,
+            'site': 'Wayfair',
+            # Placeholder image; Wayfair module doesn't include images yet
+            'image': '/window.svg',
+            'url': url,
+            'rating': rating,
+            'reviews': reviews,
+            'category': category or 'all',
+            'style': style or 'all',
+            'inStock': True,
+        })
+
+    return adapted
 
 if __name__ == '__main__':
-    logger.info("Starting rembg background removal + furniture search server...")
+    logger.info("Starting furniture search + rembg backend server...")
+    # Optionally preload rembg model for faster first request
     try:
-        logger.info("Preloading rembg model...")
-        session = new_session('u2net')
-        logger.info("Model preloaded successfully")
+        if session is None:
+            logger.info("Preloading rembg model (u2net)...")
+            session = new_session('u2net')
+            setattr(session, '_model_name', 'u2net')
+            logger.info("Model preloaded successfully")
     except Exception as e:
-        logger.error(f"Failed to preload model: {e}")
+        logger.warning(f"Failed to preload rembg model: {e}")
         session = None
-    app.run(
-        host='127.0.0.1',
-        port=5000,
-        debug=False,
-        threaded=True
-    )
+
+    host = os.getenv('HOST', '127.0.0.1')
+    # Default to port 5000 to match frontend/tests; can override via PORT env var
+    port = int(os.getenv('PORT', '5000'))  # UPDATED DEFAULT PORT
+    logger.info(f"Server listening on http://{host}:{port}")
+    app.run(host=host, port=port, debug=False, threaded=True)
