@@ -169,6 +169,88 @@ def make_result(idx_prefix: str, idx: int, title: str, price_val, site: str, ima
         'inStock': True
     }
 
+# --- Wayfair module adapter (moved up so it's defined before use) ---
+
+def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: str) -> List[Dict[str, Any]]:
+    """Convert results from python-backend/wayfair.get_products() into app schema.
+    Expected input item keys: title, price, reviews, star_rating, url, image
+    Output schema keys: id, title, price, originalPrice, site, image, url, rating, reviews, category, style, inStock
+    """
+    adapted: List[Dict[str, Any]] = []
+    if not isinstance(items, list):
+        return adapted
+
+    PRICE_REGEX = re.compile(r'\$\s*([0-9][0-9,]*\.?[0-9]{0,2})')
+
+    def _extract_price_str(p):
+        if p is None:
+            return None
+        s = str(p)
+        m = PRICE_REGEX.search(s)
+        if m:
+            return f"${m.group(1)}"
+        return s if '$' in s else None
+
+    def _extract_price_float(p):
+        try:
+            m = PRICE_REGEX.search(str(p))
+            if not m:
+                return None
+            return float(m.group(1).replace(',', ''))
+        except Exception:
+            return None
+
+    def _extract_reviews(rv):
+        try:
+            nums = re.findall(r'[0-9,]+', str(rv))
+            if not nums:
+                return None
+            return int(nums[0].replace(',', ''))
+        except Exception:
+            return None
+
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            continue
+        title = (it.get('title') or '').strip()
+        if not title:
+            continue
+        url = it.get('url') or ''
+        price_str = _extract_price_str(it.get('price'))
+        price_val = _extract_price_float(it.get('price'))
+        rating_raw = it.get('star_rating')
+        try:
+            rating = float(rating_raw) if rating_raw not in (None, '', 'N/A') else None
+        except Exception:
+            rating = None
+        reviews = _extract_reviews(it.get('reviews'))
+
+        img_url = it.get('image') or ''
+        if isinstance(img_url, str):
+            if img_url.startswith('//'):
+                img_url = 'https:' + img_url
+            elif img_url.startswith('/'):
+                img_url = 'https://www.wayfair.com' + img_url
+        else:
+            img_url = ''
+
+        adapted.append({
+            'id': f'wayfair-{i+1}',
+            'title': title,
+            'price': price_str or (f"${price_val:.2f}" if isinstance(price_val, float) else None) or '$',
+            'originalPrice': None,
+            'site': 'Wayfair',
+            'image': img_url or '/window.svg',
+            'url': url,
+            'rating': rating,
+            'reviews': reviews,
+            'category': category or 'all',
+            'style': style or 'all',
+            'inStock': True,
+        })
+
+    return adapted
+
 # --- Wayfair scraping helpers (resilient) ---
 PRICE_REGEX = re.compile(r'\$\s*([0-9][0-9,]*\.?[0-9]{0,2})')
 
@@ -975,45 +1057,7 @@ def search_furniture_endpoint():
                     wayfair_items = wayfair_get_products(query)
                 except TypeError:
                     wayfair_items = wayfair_get_products(query=query)
-                # Optional: filter by price range here if the module didn't
-                try:
-                    adapted = _adapt_wayfair_products(wayfair_items, category, style)
-                except NameError:
-                    # Inline fallback adapter if function not yet defined in some envs
-                    adapted = []
-                    if isinstance(wayfair_items, list):
-                        for i, it in enumerate(wayfair_items):
-                            if not isinstance(it, dict):
-                                continue
-                            title = (it.get('title') or '').strip()
-                            if not title:
-                                continue
-                            # price and rating handling similar to adapter above
-                            price_match = PRICE_REGEX.search(str(it.get('price') or ''))
-                            price_str = f"${price_match.group(1)}" if price_match else (str(it.get('price')) if '$' in str(it.get('price')) else '$')
-                            try:
-                                rating_val = float(it.get('star_rating')) if it.get('star_rating') not in (None, '', 'N/A') else None
-                            except Exception:
-                                rating_val = None
-                            try:
-                                rv = it.get('reviews')
-                                rv_num = int(re.findall(r'[0-9,]+', str(rv))[0].replace(',', '')) if rv is not None else None
-                            except Exception:
-                                rv_num = None
-                            adapted.append({
-                                'id': f'wayfair-{i+1}',
-                                'title': title,
-                                'price': price_str,
-                                'originalPrice': None,
-                                'site': 'Wayfair',
-                                'image': '/window.svg',
-                                'url': it.get('url') or '',
-                                'rating': rating_val,
-                                'reviews': rv_num,
-                                'category': category or 'all',
-                                'style': style or 'all',
-                                'inStock': True,
-                            })
+                adapted = _adapt_wayfair_products(wayfair_items, category, style)
                 if adapted:
                     response = {
                         'success': True,
@@ -1073,7 +1117,7 @@ def search_furniture_endpoint():
         except Exception as e:
             logger.error(f"Wayfair search failed: {e}")
             debug_info['wayfair'] = {'error': str(e)}
-        
+
         try:
             ikea_results, ikea_debug = scrape_ikea(query, price_min, price_max, category, style)
             for it in ikea_results:
@@ -1139,79 +1183,8 @@ def search_furniture_endpoint():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 # NEW: Adapter for dedicated Wayfair module results (moved above usage)
-def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: str) -> List[Dict[str, Any]]:
-    """Convert results from python-backend/wayfair.get_products() into app schema.
-    Expected input item keys: title, price, reviews, star_rating, url
-    Output schema keys: id, title, price, originalPrice, site, image, url, rating, reviews, category, style, inStock
-    """
-    adapted: List[Dict[str, Any]] = []
-
-    if not isinstance(items, list):
-        return adapted
-
-    def _extract_price_str(p):
-        if p is None:
-            return None
-        s = str(p)
-        # Try regex for $123.45
-        m = PRICE_REGEX.search(s)
-        if m:
-            return f"${m.group(1)}"
-        # Fallback: return original if it already looks like a price
-        return s if '$' in s else None
-
-    def _extract_price_float(p):
-        try:
-            m = PRICE_REGEX.search(str(p))
-            if not m:
-                return None
-            return float(m.group(1).replace(',', ''))
-        except Exception:
-            return None
-
-    def _extract_reviews(rv):
-        try:
-            # Accept formats like "(123)", "123 reviews", "1,234"
-            nums = re.findall(r'[0-9,]+', str(rv))
-            if not nums:
-                return None
-            return int(nums[0].replace(',', ''))
-        except Exception:
-            return None
-
-    for i, it in enumerate(items):
-        if not isinstance(it, dict):
-            continue
-        title = (it.get('title') or '').strip()
-        if not title:
-            continue
-        url = it.get('url') or ''
-        price_str = _extract_price_str(it.get('price'))
-        price_val = _extract_price_float(it.get('price'))
-        rating_raw = it.get('star_rating')
-        try:
-            rating = float(rating_raw) if rating_raw not in (None, '', 'N/A') else None
-        except Exception:
-            rating = None
-        reviews = _extract_reviews(it.get('reviews'))
-
-        adapted.append({
-            'id': f'wayfair-{i+1}',
-            'title': title,
-            'price': price_str or (f"${price_val:.2f}" if isinstance(price_val, float) else None) or '$',
-            'originalPrice': None,
-            'site': 'Wayfair',
-            # Placeholder image; Wayfair module doesn't include images yet
-            'image': '/window.svg',
-            'url': url,
-            'rating': rating,
-            'reviews': reviews,
-            'category': category or 'all',
-            'style': style or 'all',
-            'inStock': True,
-        })
-
-    return adapted
+# def _adapt_wayfair_products(...):
+#     Moved above search_furniture_endpoint to ensure availability at runtime.
 
 if __name__ == '__main__':
     logger.info("Starting furniture search + rembg backend server...")
