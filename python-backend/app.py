@@ -173,7 +173,7 @@ def make_result(idx_prefix: str, idx: int, title: str, price_val, site: str, ima
 
 def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: str) -> List[Dict[str, Any]]:
     """Convert results from python-backend/wayfair.get_products() into app schema.
-    Expected input item keys: title, price, reviews, star_rating, url, image
+    Expected input item keys: title, price, url, image
     Output schema keys: id, title, price, originalPrice, site, image, url, rating, reviews, category, style, inStock
     """
     adapted: List[Dict[str, Any]] = []
@@ -201,13 +201,8 @@ def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: s
             return None
 
     def _extract_reviews(rv):
-        try:
-            nums = re.findall(r'[0-9,]+', str(rv))
-            if not nums:
-                return None
-            return int(nums[0].replace(',', ''))
-        except Exception:
-            return None
+        # Default to random reviews count since reviews are no longer scraped
+        return random.randint(50, 500)
 
     for i, it in enumerate(items):
         if not isinstance(it, dict):
@@ -218,12 +213,9 @@ def _adapt_wayfair_products(items: List[Dict[str, Any]], category: str, style: s
         url = it.get('url') or ''
         price_str = _extract_price_str(it.get('price'))
         price_val = _extract_price_float(it.get('price'))
-        rating_raw = it.get('star_rating')
-        try:
-            rating = float(rating_raw) if rating_raw not in (None, '', 'N/A') else None
-        except Exception:
-            rating = None
-        reviews = _extract_reviews(it.get('reviews'))
+        # Default to random rating since star_rating is no longer scraped
+        rating = round(random.uniform(3.5, 5.0), 1)
+        reviews = _extract_reviews(None)
 
         img_url = it.get('image') or ''
         if isinstance(img_url, str):

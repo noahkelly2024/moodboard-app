@@ -12,12 +12,7 @@ BASE_URL = "https://www.wayfair.com/keyword.php"
 WAYFAIR_DOMAIN = "https://www.wayfair.com"
 
 
-def get_star_rating(star_element):
-    try:
-        width = star_element.get('style', '').split('width:')[1].split('%')[0]
-        return round(float(width) / 20, 1)
-    except Exception:
-        return "N/A"
+
 
 # NEW: helpers to extract thumbnail image URL from nearby <img>
 
@@ -169,7 +164,7 @@ def _find_thumbnail(title_elem) -> str | None:
     return best
 
 
-def get_products(query="black leather sofa", max_pages=2):
+def get_products(query="black leather sofa", max_pages=1):
     all_products = []
     current_page = 1
 
@@ -185,8 +180,6 @@ def get_products(query="black leather sofa", max_pages=2):
         soup = BeautifulSoup(response.text, 'html.parser')
         product_titles = soup.select('h2[data-test-id="ListingCard-ListingCardName-Text"]')
         prices = soup.select('span[data-test-id="PriceDisplay"]')
-        reviews = soup.select('div[data-enzyme-id="ListingCard-ListingCardReviewStars-Reviews-reviewCount"]')
-        star_elements = soup.select('div[data-enzyme-id="ListingCard-ListingCardReviewStars-Reviews-rating"]')
 
         if not product_titles:
             print(f"[INFO] No products found on page {current_page}.")
@@ -196,8 +189,6 @@ def get_products(query="black leather sofa", max_pages=2):
             title_elem = product_titles[i]
             title = title_elem.get_text(strip=True) if title_elem else "N/A"
             price = prices[i].get_text(strip=True) if i < len(prices) else "N/A"
-            review = reviews[i].get_text(strip=True) if i < len(reviews) else "N/A"
-            star_rating = get_star_rating(star_elements[i]) if i < len(star_elements) else "N/A"
 
             parent_link = title_elem.find_parent("a")
             product_url = urljoin(WAYFAIR_DOMAIN, parent_link["href"]) if parent_link and parent_link.has_attr("href") else "N/A"
@@ -207,8 +198,6 @@ def get_products(query="black leather sofa", max_pages=2):
             all_products.append({
                 "title": title,
                 "price": price,
-                "reviews": review,
-                "star_rating": star_rating,
                 "url": product_url,
                 "image": image_url,
             })
@@ -220,7 +209,7 @@ def get_products(query="black leather sofa", max_pages=2):
 
 def save_products(products, filename="wayfair_bs4_products.csv"):
     with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["title", "price", "reviews", "star_rating", "url", "image"])
+        writer = csv.DictWriter(f, fieldnames=["title", "price", "url", "image"])
         writer.writeheader()
         writer.writerows(products)
     print(f"[DONE] Saved {len(products)} products to {filename}")
