@@ -13,6 +13,27 @@ const nextConfig: NextConfig = {
       test: /\.wasm$/,
       type: 'asset/resource',
     });
+
+    // Fix for pptxgenjs - provide fallbacks for Node.js modules in browser
+    if (!isServer) {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        https: false,
+        http: false,
+        stream: false,
+        crypto: false,
+        url: false,
+        buffer: false,
+        util: false,
+        querystring: false,
+        path: false,
+        os: false,
+        net: false,
+        tls: false,
+        child_process: false,
+      };
+    }
     
     // Only apply Node.js polyfills on client-side
     if (!isServer) {

@@ -2,12 +2,24 @@
   "name": "moodboard-app",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
+  "homepage": "./",
   "scripts": {
     "dev:web": "next dev --turbopack",
-    "dev:backend": "bash python-backend/start_backend.sh",
+    "dev:backend": "cd python-backend && python3 app.py",
     "dev": "concurrently -n web,ai -c green,magenta \"npm:dev:web\" \"npm:dev:backend\"",
     "build": "next build",
-    "start": "next start",
+    "build:all": "npm run build",
+    "start:web": "next start",
+    "start:backend": "cd python-backend && python3 app.py",
+    "start": "concurrently -n web,ai -c green,magenta \"npm:start:web\" \"npm:start:backend\"",
+    "electron": "electron .",
+    "electron:dev": "npm run build && electron .",
+    "electron:simple": "electron . --no-python",
+    "build:mac": "npm run build && electron-builder --mac",
+    "build:mac-dmg": "npm run build && electron-builder --mac --publish=never",
+    "dist": "npm run build && electron-builder",
+    "production": "npm run build:all && npm run start",
     "lint": "next lint"
   },
   "dependencies": {
@@ -30,9 +42,61 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "concurrently": "^9.0.0",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
     "eslint": "^9",
     "eslint-config-next": "15.4.6",
+    "sharp": "^0.34.3",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.moodboard.app",
+    "productName": "Mood Board Creator",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      ".next/**/*",
+      "electron/**/*",
+      "python-backend/**/*",
+      "!python-backend/venv",
+      "public/**/*",
+      "node_modules/**/*",
+      "!node_modules/@img/**",
+      "!node_modules/sharp/**",
+      "package.json",
+      "next.config.ts"
+    ],
+    "extraResources": [
+      {
+        "from": "python-backend",
+        "to": "python-backend",
+        "filter": [
+          "**/*",
+          "!venv/**/*",
+          "!__pycache__/**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "electron/assets/icon.icns"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

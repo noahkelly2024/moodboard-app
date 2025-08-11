@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Upload, Download, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, Move, RotateCw, Type, AlignLeft, AlignCenter, AlignRight, FileText, Save, FolderOpen, FolderPlus } from 'lucide-react';
+import { Upload, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, RotateCw, Type, AlignLeft, AlignCenter, AlignRight, FileText, Save, FolderOpen, FolderPlus } from 'lucide-react';
 import { ImageType, SearchResult, SearchFilters, Slide, Layer, Project, ProjectData } from '@/types';
 
 const MoodBoardApp = () => {
@@ -13,7 +13,6 @@ const MoodBoardApp = () => {
   const [slideInterval, setSlideInterval] = useState<number>(3000);
   const [viewMode, setViewMode] = useState<'grid' | 'slideshow' | 'preview'>('grid');
   const [compositionMode, setCompositionMode] = useState<boolean>(false);
-  const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false);
   const [selectedImages, setSelectedImages] = useState<Set<string | number>>(new Set());
   const [activeTab, setActiveTab] = useState<'moodboard' | 'search'>('moodboard');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -37,7 +36,7 @@ const MoodBoardApp = () => {
   const [aiAvailable, setAiAvailable] = useState<boolean>(false);
   // NEW: Constructor.io admin state
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
-  const [keyStatus, setKeyStatus] = useState<{ loading: boolean; data: any | null; error: string | null }>({ loading: false, data: null, error: null });
+  const [keyStatus, setKeyStatus] = useState<{ loading: boolean; data: Record<string, unknown> | null; error: string | null }>({ loading: false, data: null, error: null });
   const [isRefreshingKeys, setIsRefreshingKeys] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
@@ -504,13 +503,22 @@ const MoodBoardApp = () => {
             }
           }
         }
-      }
+      };
       
-      // Generate and download the PowerPoint file
-      const fileName = `mood-board-${new Date().toISOString().split('T')[0]}.pptx`;
-      await pptx.writeFile({ fileName });
+      // Create and download JSON file
+      const jsonString = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
       
-      alert(`PowerPoint exported successfully as ${fileName}`);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `mood-board-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      alert('Mood board exported as JSON file. PowerPoint export will be available in a future update.');
       
     } catch (error) {
       console.error('Export failed:', error);
@@ -518,7 +526,7 @@ const MoodBoardApp = () => {
     } finally {
       setIsExporting(false);
     }
-  }, [slides, images, compositionMode, imageUrlToBase64]);
+  }, [slides, images, compositionMode, currentSlide, viewMode, slideInterval, rembgModel]);
 
   const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files; if (!files) return;
@@ -557,7 +565,7 @@ const MoodBoardApp = () => {
   const startSlideshow = useCallback(() => { setIsPlaying(true); }, []); const stopSlideshow = useCallback(() => { setIsPlaying(false); }, []);
 
   React.useEffect(() => { if (isPlaying && viewMode === 'preview') { intervalRef.current = setInterval(() => { setCurrentSlide((prev) => { const nextSlide = prev + 1; return nextSlide >= slides.length ? 0 : nextSlide; }); }, slideInterval); return () => { if (intervalRef.current) clearInterval(intervalRef.current); }; } else { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } } }, [isPlaying, slideInterval, slides.length, viewMode]);
-  React.useEffect(() => { const handleKeyDown = (e: KeyboardEvent) => { if (viewMode === 'preview') { switch (e.key) { case 'Escape': setViewMode('slideshow'); setIsPreviewMode(false); setIsPlaying(false); break; case 'ArrowLeft': e.preventDefault(); prevSlide(); break; case 'ArrowRight': e.preventDefault(); nextSlide(); break; case ' ': e.preventDefault(); isPlaying ? stopSlideshow() : startSlideshow(); break; } } }; document.addEventListener('keydown', handleKeyDown); return () => document.removeEventListener('keydown', handleKeyDown); }, [viewMode, isPlaying, prevSlide, nextSlide, startSlideshow, stopSlideshow]);
+  React.useEffect(() => { const handleKeyDown = (e: KeyboardEvent) => { if (viewMode === 'preview') { switch (e.key) { case 'Escape': setViewMode('slideshow'); setIsPlaying(false); break; case 'ArrowLeft': e.preventDefault(); prevSlide(); break; case 'ArrowRight': e.preventDefault(); nextSlide(); break; case ' ': e.preventDefault(); isPlaying ? stopSlideshow() : startSlideshow(); break; } } }; document.addEventListener('keydown', handleKeyDown); return () => document.removeEventListener('keydown', handleKeyDown); }, [viewMode, isPlaying, prevSlide, nextSlide, startSlideshow, stopSlideshow]);
 
   const handleLayerMouseMove = useCallback((e: MouseEvent) => { if (!isDraggingLayer || !compositionCanvasRef.current) return; if (dragRafRef.current) cancelAnimationFrame(dragRafRef.current); dragRafRef.current = requestAnimationFrame(() => { const rect = compositionCanvasRef.current!.getBoundingClientRect(); const layer = slides[currentSlide]?.layers.find(l => l.id === isDraggingLayer); if (!layer) return; const newLeftPx = e.clientX - rect.left - dragOffset.x; const newTopPx = e.clientY - rect.top - dragOffset.y; const xPctRaw = (newLeftPx / rect.width) * 100; const yPctRaw = (newTopPx / rect.height) * 100; // Allow positions outside [0,100] so elements can extend past slide edges
  const x = xPctRaw; const y = yPctRaw; updateLayerProperty(currentSlide, isDraggingLayer, 'position', { x, y }); }); }, [isDraggingLayer, dragOffset, currentSlide, slides, updateLayerProperty]);
@@ -1011,9 +1019,9 @@ const MoodBoardApp = () => {
           {activeTab === 'moodboard' && (
             <div className="flex items-center justify-center pb-4 border-t border-gray-700/30 pt-4 space-x-4">
               <div className="flex bg-gray-700/50 backdrop-blur-sm rounded-lg p-1 border border-gray-600/30">
-                <button onClick={() => { setViewMode('grid'); setIsPreviewMode(false); }} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'grid' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Grid className="w-4 h-4" /> <span>Grid</span></button>
-                <button onClick={() => { setViewMode('slideshow'); setIsPreviewMode(false); }} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'slideshow' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Layers className="w-4 h-4" /> <span>Slideshow</span></button>
-                <button onClick={() => { setViewMode('preview'); setIsPreviewMode(true); }} disabled={slides.length === 0 || slides.every(s => s.layers.length === 0)} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'preview' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Play className="w-4 h-4" /> <span>Preview</span></button>
+                <button onClick={() => { setViewMode('grid'); }} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'grid' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Grid className="w-4 h-4" /> <span>Grid</span></button>
+                <button onClick={() => { setViewMode('slideshow'); }} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'slideshow' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Layers className="w-4 h-4" /> <span>Slideshow</span></button>
+                <button onClick={() => { setViewMode('preview'); }} disabled={slides.length === 0 || slides.every(s => s.layers.length === 0)} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'preview' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Play className="w-4 h-4" /> <span>Preview</span></button>
               </div>
               <div className="flex items-center space-x-4">
                 {/* BG Removal selector replaced with fixed AI badge + status */}
@@ -1196,7 +1204,7 @@ const MoodBoardApp = () => {
                           <span className="text-white text-sm">{currentSlide + 1} / {slides.length}</span>
                         </div>
                       </div>
-                      <button onClick={() => { setViewMode('slideshow'); setIsPreviewMode(false); setIsPlaying(false); }} className="absolute top-4 right-4 z-10 p-2 bg-red-600 text-white rounded-full hover:bg-red-700" title="Exit Preview"> <X className="w-5 h-5" /></button>
+                      <button onClick={() => { setViewMode('slideshow'); setIsPlaying(false); }} className="absolute top-4 right-4 z-10 p-2 bg-red-600 text-white rounded-full hover:bg-red-700" title="Exit Preview"> <X className="w-5 h-5" /></button>
                       <div className="w-full h-full flex items-center justify-center pt-20 pb-8 px-4">
                         <div className="relative bg-gray-900 rounded-lg border-2 border-dashed border-gray-600 overflow-hidden" style={{ aspectRatio: '16/9', width: '98vw', maxWidth: '2000px', height: 'auto' }}>
                           {currentSlideData?.layers.map((layer) => {
