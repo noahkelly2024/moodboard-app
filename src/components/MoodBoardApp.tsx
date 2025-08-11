@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useRef, useCallback } from 'react';
-import { Upload, Download, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, Move, RotateCw, Type, AlignLeft, AlignCenter, AlignRight, FileText } from 'lucide-react';
-import { ImageType, SearchResult, SearchFilters, Slide, Layer } from '@/types';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
+import { Upload, Download, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, Move, RotateCw, Type, AlignLeft, AlignCenter, AlignRight, FileText, Save, FolderOpen, FolderPlus } from 'lucide-react';
+import { ImageType, SearchResult, SearchFilters, Slide, Layer, Project, ProjectData } from '@/types';
 import PptxGenJS from 'pptxgenjs';
 
 const MoodBoardApp = () => {
@@ -41,6 +41,16 @@ const MoodBoardApp = () => {
   const [keyStatus, setKeyStatus] = useState<{ loading: boolean; data: any | null; error: string | null }>({ loading: false, data: null, error: null });
   const [isRefreshingKeys, setIsRefreshingKeys] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<boolean>(false);
+
+  // Project management state
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [showProjectModal, setShowProjectModal] = useState<boolean>(false);
+  const [projectModalMode, setProjectModalMode] = useState<'create' | 'save' | 'load'>('create');
+  const [projectName, setProjectName] = useState<string>('');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [autoSaveEnabled, setAutoSaveEnabled] = useState<boolean>(true);
+  const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   // removed unused canvasRef
@@ -555,6 +565,366 @@ const MoodBoardApp = () => {
 
   const updateSlideBackgroundColor = useCallback((color: string) => { setSlides(prev => prev.map((slide, idx) => idx === currentSlide ? { ...slide, backgroundColor: color } : slide)); }, [currentSlide]);
 
+  // Project Management Functions
+  const createProjectData = useCallback((): ProjectData => ({
+    images,
+    slides,
+    currentSlide,
+    viewMode,
+    compositionMode,
+    slideInterval,
+    favorites: Array.from(favorites),
+    rembgModel
+  }), [images, slides, currentSlide, viewMode, compositionMode, slideInterval, favorites, rembgModel]);
+
+  const loadProjectData = useCallback((projectData: ProjectData) => {
+    // Restore images, but note that processed versions may be null due to compression
+    setImages(projectData.images.map((img: ImageType) => ({
+      ...img,
+      processed: img.processed, // May be null - will need to be regenerated
+      useProcessed: img.processed ? img.useProcessed : false // Only use processed if it exists
+    })));
+    setSlides(projectData.slides);
+    setCurrentSlide(projectData.currentSlide);
+    setViewMode(projectData.viewMode);
+    setCompositionMode(projectData.compositionMode);
+    setSlideInterval(projectData.slideInterval);
+    setFavorites(new Set(projectData.favorites));
+    setRembgModel(projectData.rembgModel);
+    setSelectedImages(new Set());
+    setSelectedLayer(null);
+  }, []);
+
+  const saveProjectToStorage = useCallback((project: Project) => {
+    try {
+      // First, try to compress the project data
+      const compressedProject = {
+        ...project,
+        data: {
+          ...project.data,
+          // Don't save processed images to reduce size - they can be regenerated
+          images: project.data.images.map(img => ({
+            ...img,
+            processed: null // Remove processed images to save space
+          }))
+        }
+      };
+
+      const savedProjects = JSON.parse(localStorage.getItem('moodboard-projects') || '[]');
+      const existingIndex = savedProjects.findIndex((p: Project) => p.id === project.id);
+      
+      if (existingIndex >= 0) {
+        savedProjects[existingIndex] = compressedProject;
+      } else {
+        savedProjects.push(compressedProject);
+      }
+      
+      const projectsJson = JSON.stringify(savedProjects);
+      
+      // Check if the data is too large (approaching localStorage limit)
+      const sizeInBytes = new Blob([projectsJson]).size;
+      const maxSize = 4 * 1024 * 1024; // 4MB limit (conservative)
+      
+      if (sizeInBytes > maxSize) {
+        // If too large, remove oldest projects until it fits
+        const sortedProjects = [...savedProjects].sort((a, b) => 
+          new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime()
+        );
+        
+        let reducedProjects = [...savedProjects];
+        
+        // Keep removing oldest projects (except the current one) until size is acceptable
+        while (reducedProjects.length > 1 && new Blob([JSON.stringify(reducedProjects)]).size > maxSize) {
+          const oldestProject = sortedProjects.find(p => 
+            reducedProjects.includes(p) && p.id !== project.id
+          );
+          
+          if (oldestProject) {
+            reducedProjects = reducedProjects.filter(p => p.id !== oldestProject.id);
+          } else {
+            break; // Safety break
+          }
+        }
+        
+        // If still too large, compress images further
+        if (new Blob([JSON.stringify(reducedProjects)]).size > maxSize) {
+          reducedProjects = reducedProjects.map(p => ({
+            ...p,
+            data: {
+              ...p.data,
+              images: p.data.images.map((img: ImageType) => ({
+                id: img.id,
+                name: img.name,
+                useProcessed: false,
+                original: img.original.length > 100000 ? '' : img.original, // Remove large images
+                processed: null,
+                searchMetadata: img.searchMetadata
+              }))
+            }
+          }));
+        }
+        
+        localStorage.setItem('moodboard-projects', JSON.stringify(reducedProjects));
+        setProjects(reducedProjects);
+        
+        // Show warning about data compression
+        console.warn('Project storage approaching limit. Some older projects or large images may have been removed.');
+        alert('Storage space optimized: Some older projects or large images were compressed to save your current work.');
+        
+      } else {
+        localStorage.setItem('moodboard-projects', projectsJson);
+        setProjects(savedProjects);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to save project:', error);
+      
+      // Last resort: try to save just this project by clearing others
+      try {
+        const minimalProject = {
+          ...project,
+          data: {
+            ...project.data,
+            images: project.data.images.map((img: ImageType) => ({
+              id: img.id,
+              name: img.name,
+              useProcessed: false,
+              original: '',
+              processed: null,
+              searchMetadata: img.searchMetadata
+            }))
+          }
+        };
+        
+        localStorage.setItem('moodboard-projects', JSON.stringify([minimalProject]));
+        setProjects([minimalProject]);
+        
+        alert('Storage quota exceeded. Some image data was removed to save the project. You may need to re-upload images.');
+        return true;
+      } catch (finalError) {
+        alert('Unable to save project - storage quota exceeded. Try removing some images or creating a new project.');
+        return false;
+      }
+    }
+  }, []);
+
+  const loadProjectsFromStorage = useCallback(() => {
+    try {
+      const savedProjects = JSON.parse(localStorage.getItem('moodboard-projects') || '[]');
+      setProjects(savedProjects);
+    } catch (error) {
+      console.error('Failed to load projects:', error);
+      setProjects([]);
+    }
+  }, []);
+
+  const autoSaveProject = useCallback(async () => {
+    if (!autoSaveEnabled || !currentProject) return;
+
+    try {
+      const updatedProject: Project = {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        data: createProjectData()
+      };
+
+      if (saveProjectToStorage(updatedProject)) {
+        setCurrentProject(updatedProject);
+        setLastSaved(new Date());
+      }
+    } catch (error) {
+      console.error('Auto-save failed:', error);
+    }
+  }, [autoSaveEnabled, currentProject, createProjectData, saveProjectToStorage]);
+
+  const createNewProject = useCallback((name: string) => {
+    const newProject: Project = {
+      id: `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      name: name.trim() || 'Untitled Project',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      data: createProjectData()
+    };
+
+    if (saveProjectToStorage(newProject)) {
+      setCurrentProject(newProject);
+      setLastSaved(new Date());
+      return newProject;
+    }
+    return null;
+  }, [createProjectData, saveProjectToStorage]);
+
+  const saveCurrentProject = useCallback((name?: string) => {
+    setIsSaving(true);
+    
+    try {
+      let project: Project;
+      
+      if (currentProject && !name) {
+        // Update existing project
+        project = {
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          data: createProjectData()
+        };
+      } else {
+        // Create new project or save as new
+        project = {
+          id: `project_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          name: name?.trim() || currentProject?.name || 'Untitled Project',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          data: createProjectData()
+        };
+      }
+
+      if (saveProjectToStorage(project)) {
+        setCurrentProject(project);
+        setLastSaved(new Date());
+        setShowProjectModal(false);
+        setProjectName('');
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to save project:', error);
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [currentProject, createProjectData, saveProjectToStorage]);
+
+  const loadProject = useCallback((project: Project) => {
+    loadProjectData(project.data);
+    setCurrentProject(project);
+    setLastSaved(new Date(project.updatedAt));
+    setShowProjectModal(false);
+  }, [loadProjectData]);
+
+  const deleteProject = useCallback((projectId: string) => {
+    try {
+      const savedProjects = JSON.parse(localStorage.getItem('moodboard-projects') || '[]');
+      const filteredProjects = savedProjects.filter((p: Project) => p.id !== projectId);
+      localStorage.setItem('moodboard-projects', JSON.stringify(filteredProjects));
+      setProjects(filteredProjects);
+      
+      if (currentProject?.id === projectId) {
+        setCurrentProject(null);
+        setLastSaved(null);
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('Failed to delete project:', error);
+      return false;
+    }
+  }, [currentProject]);
+
+  const startNewProject = useCallback(() => {
+    // Reset to default state
+    setImages([]);
+    setSlides([{ id: 1, layers: [], backgroundColor: '#1f2937' }]);
+    setCurrentSlide(0);
+    setViewMode('grid');
+    setCompositionMode(false);
+    setSlideInterval(3000);
+    setFavorites(new Set());
+    setRembgModel('u2net');
+    setSelectedImages(new Set());
+    setSelectedLayer(null);
+    setCurrentProject(null);
+    setLastSaved(null);
+  }, []);
+
+  // Load projects on component mount
+  useEffect(() => {
+    loadProjectsFromStorage();
+    
+    // Load auto-save settings
+    const autoSaveSetting = localStorage.getItem('moodboard-autosave');
+    if (autoSaveSetting !== null) {
+      setAutoSaveEnabled(JSON.parse(autoSaveSetting));
+    }
+  }, [loadProjectsFromStorage]);
+
+  // Auto-save effect - triggers when important data changes
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (currentProject && (images.length > 0 || slides.some(s => s.layers.length > 0))) {
+        autoSaveProject();
+      }
+    }, 2000); // Auto-save after 2 seconds of inactivity
+
+    return () => clearTimeout(timeoutId);
+  }, [images, slides, currentSlide, viewMode, compositionMode, slideInterval, favorites, rembgModel, autoSaveProject, currentProject]);
+
+  // Save auto-save preference
+  useEffect(() => {
+    localStorage.setItem('moodboard-autosave', JSON.stringify(autoSaveEnabled));
+  }, [autoSaveEnabled]);
+
+  // Prevent accidental page close if there are unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!currentProject && (images.length > 0 || slides.some(s => s.layers.length > 0))) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [currentProject, images, slides]);
+
+  // Storage management utilities
+  const getStorageUsage = useCallback(() => {
+    try {
+      const projects = localStorage.getItem('moodboard-projects') || '[]';
+      const sizeInBytes = new Blob([projects]).size;
+      const maxSize = 5 * 1024 * 1024; // 5MB typical localStorage limit
+      return {
+        used: sizeInBytes,
+        max: maxSize,
+        percentage: (sizeInBytes / maxSize) * 100
+      };
+    } catch {
+      return { used: 0, max: 5 * 1024 * 1024, percentage: 0 };
+    }
+  }, []);
+
+  const cleanupOldProjects = useCallback((): number => {
+    try {
+      const savedProjects = JSON.parse(localStorage.getItem('moodboard-projects') || '[]');
+      if (savedProjects.length <= 3) return 0; // Keep at least 3 projects
+      
+      // Sort by updatedAt and keep only the 3 most recent (excluding current project)
+      const sorted = savedProjects.sort((a: Project, b: Project) => 
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
+      
+      const currentProjectId = currentProject?.id;
+      const toKeep = sorted.slice(0, 3);
+      
+      // Always include current project if it's not in the top 3
+      if (currentProjectId && !toKeep.find((p: Project) => p.id === currentProjectId)) {
+        const currentProjectData = sorted.find((p: Project) => p.id === currentProjectId);
+        if (currentProjectData) {
+          toKeep[2] = currentProjectData; // Replace the 3rd oldest with current project
+        }
+      }
+      
+      localStorage.setItem('moodboard-projects', JSON.stringify(toKeep));
+      setProjects(toKeep);
+      
+      return savedProjects.length - toKeep.length;
+    } catch (error) {
+      console.error('Failed to cleanup projects:', error);
+      return 0;
+    }
+  }, [currentProject]);
+
   // Helper to render status cards for admin panel
   const SITE_LABELS: Record<string, string> = { pottery_barn: 'Pottery Barn', west_elm: 'West Elm', raymour_flanigan: 'Raymour & Flanigan' };
   const renderKeyStatus = (data: any) => {
@@ -594,10 +964,47 @@ const MoodBoardApp = () => {
             <div className="flex items-center space-x-4">
               <h1 className="text-2xl font-bold text-gradient whitespace-nowrap">Mood Board Creator</h1>
               <p className="text-sm text-gray-400 hidden sm:block">Interior Design Tool</p>
+              {currentProject && (
+                <div className="hidden lg:flex items-center space-x-2 text-sm text-gray-300">
+                  <span>Project:</span>
+                  <span className="text-white font-medium">{currentProject.name}</span>
+                  {lastSaved && (
+                    <span className="text-gray-400">
+                      (saved {new Date(lastSaved).toLocaleTimeString()})
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="flex bg-gray-700/50 backdrop-blur-sm rounded-lg p-1 border border-gray-600/30">
-              <button onClick={() => setActiveTab('moodboard')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'moodboard' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}>Mood Board</button>
-              <button onClick={() => setActiveTab('search')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'search' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}>Search Furniture</button>
+            <div className="flex items-center space-x-3">
+              {/* Project Management Controls */}
+              <div className="flex items-center space-x-2">
+                <button 
+                  onClick={() => { setProjectModalMode('create'); setShowProjectModal(true); }} 
+                  className="p-2 text-gray-300 hover:text-white hover:bg-gray-600/30 rounded-lg transition-all" 
+                  title="New Project"
+                >
+                  <FolderPlus className="w-4 h-4" />
+                </button>
+                <button 
+                  onClick={() => { setProjectModalMode('save'); setShowProjectModal(true); }} 
+                  className="p-2 text-gray-300 hover:text-white hover:bg-gray-600/30 rounded-lg transition-all" 
+                  title="Save Project"
+                >
+                  <Save className="w-4 h-4" />
+                </button>
+                <button 
+                  onClick={() => { setProjectModalMode('load'); setShowProjectModal(true); }} 
+                  className="p-2 text-gray-300 hover:text-white hover:bg-gray-600/30 rounded-lg transition-all" 
+                  title="Open Project"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="flex bg-gray-700/50 backdrop-blur-sm rounded-lg p-1 border border-gray-600/30">
+                <button onClick={() => setActiveTab('moodboard')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'moodboard' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}>Mood Board</button>
+                <button onClick={() => setActiveTab('search')} className={`px-4 py-2 rounded-md text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'search' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}>Search Furniture</button>
+              </div>
             </div>
           </div>
           {activeTab === 'moodboard' && (
@@ -964,7 +1371,7 @@ const MoodBoardApp = () => {
                 ) : viewMode === 'grid' ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                     {images.map(image => (
-                      <div key={image.id} className={`relative card-dark rounded-lg shadow-lg border-2 transition-all ${selectedImages.has(image.id) ? 'gradient-border ring-2 ring-purple-400/20' : 'hover:border-gray-500'}`}> <div className="aspect-square p-2"><img src={image.useProcessed && image.processed ? image.processed : image.original} alt={image.name} className="w-full h-full object-contain rounded cursor-pointer" onClick={() => toggleImageSelection(image.id)} /></div> <div className="absolute top-2 right-2 flex space-x-1"> {processingImages.has(image.id) && (<div className="p-1 bg-yellow-500 text-white rounded text-xs animate-pulse"><div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" /></div>)} {image.processed && (<button onClick={() => toggleBackgroundRemoval(image.id)} className={`p-1 rounded text-xs ${image.useProcessed ? 'bg-green-600 text-white' : 'bg-gray-600 text-white'}`} title={image.useProcessed ? 'Using AI-processed version' : 'Using original'}><RotateCcw className="w-3 h-3" /></button>)} <button onClick={() => manualBackgroundRemoval(image.id, 'ai')} disabled={processingImages.has(image.id)} className="p-1 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded text-xs hover:from-purple-700 hover:to-blue-700 disabled:opacity-50" title="Remove background (AI)"><Filter className="w-3 h-3" /></button> <button onClick={() => deleteImage(image.id)} className="p-1 bg-red-600 text-white rounded text-xs hover:bg-red-700" title="Delete image"><Trash2 className="w-3 h-3" /></button> </div> <div className="p-2 border-t border-gray-600"><p className="text-xs text-gray-300 truncate" title={image.name}>{image.name}</p>{image.searchMetadata && (<div className="flex items-center justify-between mt-1"><span className="text-lg font-bold text-green-400">{image.searchMetadata.price}</span><span className="text-sm text-gray-300">{image.searchMetadata.site}</span></div>)} </div> </div>
+                      <div key={image.id} className={`relative card-dark rounded-lg shadow-lg border-2 transition-all ${selectedImages.has(image.id) ? 'gradient-border ring-2 ring-purple-400/20' : 'hover:border-gray-500'}`}> <div className="aspect-square p-2"><img src={image.useProcessed && image.processed ? image.processed : image.original} alt={image.name} className="w-full h-full object-contain rounded cursor-pointer" onClick={() => toggleImageSelection(image.id)} /></div> <div className="absolute top-2 right-2 flex space-x-1"> {processingImages.has(image.id) && (<div className="p-1 bg-yellow-500 text-white rounded text-xs animate-pulse"><div className="w-3 h-3 border-2 border-white/70 border-t-transparent rounded-full animate-spin" /></div>)} {image.processed && (<button onClick={() => toggleBackgroundRemoval(image.id)} className={`p-1 rounded text-xs ${image.useProcessed ? 'bg-green-600 text-white' : 'bg-gray-600 text-white'}`} title={image.useProcessed ? 'Using AI-processed version' : 'Using original'}><RotateCcw className="w-3 h-3" /></button>)} <button onClick={() => manualBackgroundRemoval(image.id, 'ai')} disabled={processingImages.has(image.id)} className="p-1 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded text-xs hover:from-purple-700 hover:to-blue-700 disabled:opacity-50" title="Remove background (AI)"><Filter className="w-3 h-3" /></button> <button onClick={() => deleteImage(image.id)} className="p-1 bg-red-600 text-white rounded text-xs hover:bg-red-700" title="Delete image"><Trash2 className="w-3 h-3" /></button> </div> <div className="p-2 border-t border-gray-600"><p className="text-xs text-gray-300 truncate" title={image.name}>{image.name}</p>{image.searchMetadata && (<div className="flex items-center justify-between mt-1"><span className="text-lg font-bold text-green-400">{image.searchMetadata.price}</span><span className="text-sm text-gray-300">{image.searchMetadata.site}</span></div>)} </div> </div>
                     ))}
                                    </div>
                 ) : (
@@ -978,6 +1385,268 @@ const MoodBoardApp = () => {
           </>
         )}
       </main>
+
+      {/* Project Management Modal */}
+      {showProjectModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="card-dark rounded-lg shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden">
+            <div className="p-6 border-b border-gray-700/50">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-white">
+                  {projectModalMode === 'create' && 'Create New Project'}
+                  {projectModalMode === 'save' && 'Save Project'}
+                  {projectModalMode === 'load' && 'Open Project'}
+                </h3>
+                <button 
+                  onClick={() => {
+                    setShowProjectModal(false);
+                    setProjectName('');
+                  }}
+                  className="p-2 text-gray-400 hover:text-white hover:bg-gray-600/30 rounded-lg transition-all"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 overflow-y-auto max-h-[70vh]">
+              {(projectModalMode === 'create' || projectModalMode === 'save') && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Project Name
+                    </label>
+                    <input
+                      type="text"
+                      value={projectName}
+                      onChange={(e) => setProjectName(e.target.value)}
+                      placeholder="Enter project name..."
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                      autoFocus
+                    />
+                  </div>
+
+                  {projectModalMode === 'save' && currentProject && (
+                    <div className="p-3 bg-gray-700/30 rounded-lg border border-gray-600/30">
+                      <p className="text-sm text-gray-300">
+                        Current project: <span className="text-white font-medium">{currentProject.name}</span>
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">
+                        Last saved: {new Date(currentProject.updatedAt).toLocaleString()}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="flex items-center space-x-2 text-sm text-gray-300">
+                    <input
+                      type="checkbox"
+                      id="autoSave"
+                      checked={autoSaveEnabled}
+                      onChange={(e) => setAutoSaveEnabled(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-purple-600 focus:ring-purple-500"
+                    />
+                    <label htmlFor="autoSave">Enable auto-save (saves every 2 seconds)</label>
+                  </div>
+
+                  <div className="flex space-x-3 pt-4">
+                    <button
+                      onClick={() => {
+                        if (projectModalMode === 'create') {
+                          startNewProject();
+                          if (projectName.trim()) {
+                            createNewProject(projectName);
+                          }
+                        } else {
+                          saveCurrentProject(projectName || undefined);
+                        }
+                      }}
+                      disabled={isSaving}
+                      className="flex-1 btn-gradient disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isSaving ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/70 border-t-transparent rounded-full animate-spin mr-2" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-4 h-4 mr-2" />
+                          {projectModalMode === 'create' ? 'Create Project' : 'Save Project'}
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowProjectModal(false);
+                        setProjectName('');
+                      }}
+                      className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-500 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {projectModalMode === 'load' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">
+                      {projects.length} saved project{projects.length !== 1 ? 's' : ''}
+                    </span>
+                    <button
+                      onClick={() => {
+                        startNewProject();
+                        setShowProjectModal(false);
+                      }}
+                      className="px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-500 transition-colors"
+                    >
+                      Start Fresh
+                    </button>
+                  </div>
+
+                  {/* Storage Usage Indicator */}
+                  {(() => {
+                    const usage = getStorageUsage();
+                    const usedMB = (usage.used / (1024 * 1024)).toFixed(1);
+                    const maxMB = (usage.max / (1024 * 1024)).toFixed(0);
+                    const isHigh = usage.percentage > 80;
+                    
+                    return (
+                      <div className={`p-3 rounded-lg border ${isHigh ? 'border-yellow-500/30 bg-yellow-500/10' : 'border-gray-600/30 bg-gray-700/30'}`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className={`text-sm font-medium ${isHigh ? 'text-yellow-200' : 'text-gray-300'}`}>
+                            Storage Usage
+                          </span>
+                          {projects.length > 3 && (
+                            <button
+                              onClick={() => {
+                                const cleaned = cleanupOldProjects();
+                                if (cleaned && cleaned > 0) {
+                                  alert(`Cleaned up ${cleaned} old project${cleaned !== 1 ? 's' : ''} to free space.`);
+                                }
+                              }}
+                              className="px-2 py-1 text-xs bg-gray-600 text-white rounded hover:bg-gray-500 transition-colors"
+                            >
+                              Cleanup Old
+                            </button>
+                          )}
+                        </div>
+                        <div className="flex items-center space-x-3">
+                          <div className="flex-1 bg-gray-600 rounded-full h-2">
+                            <div 
+                              className={`h-2 rounded-full transition-all ${isHigh ? 'bg-yellow-400' : 'bg-purple-500'}`}
+                              style={{ width: `${Math.min(100, usage.percentage)}%` }}
+                            />
+                          </div>
+                          <span className={`text-xs ${isHigh ? 'text-yellow-200' : 'text-gray-400'}`}>
+                            {usedMB} / {maxMB} MB
+                          </span>
+                        </div>
+                        {isHigh && (
+                          <p className="text-xs text-yellow-300 mt-1">
+                            Storage nearly full. Consider cleaning up old projects or removing large images.
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {projects.length === 0 ? (
+                    <div className="text-center py-8">
+                      <FolderOpen className="w-16 h-16 text-gray-400 mx-auto mb-3" />
+                      <p className="text-gray-300">No saved projects</p>
+                      <p className="text-sm text-gray-400 mt-1">Create a new project to get started</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                      {projects.map((project) => (
+                        <div
+                          key={project.id}
+                          className={`p-4 rounded-lg border transition-all cursor-pointer ${
+                            currentProject?.id === project.id
+                              ? 'border-purple-500 bg-purple-500/10'
+                              : 'border-gray-600 bg-gray-700/30 hover:bg-gray-700/50 hover:border-gray-500'
+                          }`}
+                          onClick={() => loadProject(project)}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <h4 className="text-white font-medium">{project.name}</h4>
+                              <p className="text-sm text-gray-400 mt-1">
+                                Created: {new Date(project.createdAt).toLocaleDateString()}
+                              </p>
+                              <p className="text-sm text-gray-400">
+                                Updated: {new Date(project.updatedAt).toLocaleString()}
+                              </p>
+                              <div className="flex items-center space-x-4 text-xs text-gray-500 mt-2">
+                                <span>{project.data.images.length} images</span>
+                                <span>{project.data.slides.length} slides</span>
+                                <span>{project.data.slides.reduce((total, slide) => total + slide.layers.length, 0)} layers</span>
+                              </div>
+                            </div>
+                            <div className="flex space-x-2">
+                              {currentProject?.id === project.id && (
+                                <span className="px-2 py-1 bg-green-600/20 text-green-200 rounded text-xs">
+                                  Current
+                                </span>
+                              )}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (confirm(`Delete project "${project.name}"? This cannot be undone.`)) {
+                                    deleteProject(project.id);
+                                  }
+                                }}
+                                className="p-2 text-gray-400 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors"
+                                title="Delete Project"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-save Status Indicator */}
+      {(currentProject || (images.length > 0 || slides.some(s => s.layers.length > 0))) && (
+        <div className="fixed bottom-4 right-4 z-40">
+          <div className="flex items-center space-x-2 px-3 py-2 bg-gray-800/90 backdrop-blur-sm rounded-lg border border-gray-600/30 text-sm">
+            {currentProject ? (
+              <>
+                <div className={`w-2 h-2 rounded-full ${
+                  lastSaved && new Date().getTime() - lastSaved.getTime() < 5000 
+                    ? 'bg-green-400' 
+                    : autoSaveEnabled 
+                      ? 'bg-blue-400' 
+                      : 'bg-yellow-400'
+                }`}></div>
+                <span className="text-gray-300">
+                  {lastSaved && new Date().getTime() - lastSaved.getTime() < 5000 
+                    ? 'Saved' 
+                    : autoSaveEnabled 
+                      ? 'Auto-saving...' 
+                      : 'Auto-save off'
+                  }
+                </span>
+              </>
+            ) : (
+              <>
+                <div className="w-2 h-2 rounded-full bg-orange-400"></div>
+                <span className="text-gray-300">Unsaved changes</span>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

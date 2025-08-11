@@ -52,3 +52,22 @@ export interface SearchFilters {
   priceRange: string;
   style: string;
 }
+
+export interface Project {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  data: ProjectData;
+}
+
+export interface ProjectData {
+  images: ImageType[];
+  slides: Slide[];
+  currentSlide: number;
+  viewMode: 'grid' | 'slideshow' | 'preview';
+  compositionMode: boolean;
+  slideInterval: number;
+  favorites: string[];
+  rembgModel: string;
+}
