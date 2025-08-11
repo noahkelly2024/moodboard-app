@@ -43,10 +43,17 @@ except Exception:
 
 # NEW: Try to import Raymour & Flanigan API helpers
 try:
-    from raymour_flanigan import fetch_raymour_flanigan_autocomplete as rf_fetch_autocomplete, extract_results as rf_extract_results
+    from raymour_flanigan import (
+        fetch_raymour_flanigan_autocomplete as rf_fetch_autocomplete,
+        extract_results as rf_extract_results,
+        fetch_raymour_flanigan_search as rf_fetch_search,
+        extract_results_from_search as rf_extract_from_search,
+    )
 except Exception:
     rf_fetch_autocomplete = None  # type: ignore
     rf_extract_results = None  # type: ignore
+    rf_fetch_search = None  # type: ignore
+    rf_extract_from_search = None  # type: ignore
 
 # Centralized Constructor.io key storage
 try:
@@ -490,6 +497,17 @@ def rf_get_products(query: str, num_results: int = 20) -> List[Dict[str, Any]]:
             raw = rf_fetch_autocomplete(query=query, num_suggestions=0, num_products=num_results)
             if raw:
                 items = rf_extract_results(raw, fallback_query=query, include_suggestions=False) or []
+                # Fallback to full search if autocomplete has no prices
+                if (not items) or all(not (isinstance(it, dict) and (it.get('price') or '')) for it in items):
+                    if rf_fetch_search and rf_extract_from_search:
+                        try:
+                            sraw = rf_fetch_search(query=query, num_results_per_page=num_results, page=1)
+                            if sraw:
+                                alt = rf_extract_from_search(sraw) or []
+                                if alt:
+                                    items = alt
+                        except Exception:
+                            pass
     except Exception as e:
         logger.warning(f"Raymour & Flanigan API fetch failed: {e}")
     return items
