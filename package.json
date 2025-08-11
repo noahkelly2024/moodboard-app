@@ -15,6 +15,7 @@
     "start": "concurrently -n web,ai -c green,magenta \"npm:start:web\" \"npm:start:backend\"",
     "electron": "electron .",
     "electron:dev": "concurrently \"npm:dev:backend\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:simple": "electron . --no-python",
     "build:mac": "npm run build && electron-builder --mac",
     "build:mac-dmg": "npm run build && electron-builder --mac --publish=never",
     "dist": "npm run build && electron-builder",
@@ -80,17 +81,10 @@
       "category": "public.app-category.graphics-design",
       "target": [
         {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "target": "dir",
+          "arch": ["x64", "arm64"]
         }
       ],
-      "icon": "electron/assets/icon.icns"
-    },
-    "dmg": {
-      "title": "Mood Board Creator",
       "icon": "electron/assets/icon.icns"
     },
     "nsis": {
