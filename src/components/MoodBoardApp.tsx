@@ -883,14 +883,14 @@ const MoodBoardApp = () => {
     try {
       const projects = localStorage.getItem('moodboard-projects') || '[]';
       const sizeInBytes = new Blob([projects]).size;
-      const maxSize = 5 * 1024 * 1024; // 5MB typical localStorage limit
+      const maxSize = 100 * 1024 * 1024; // 100MB localStorage limit
       return {
         used: sizeInBytes,
         max: maxSize,
         percentage: (sizeInBytes / maxSize) * 100
       };
     } catch {
-      return { used: 0, max: 5 * 1024 * 1024, percentage: 0 };
+      return { used: 0, max: 100 * 1024 * 1024, percentage: 0 };
     }
   }, []);
 
