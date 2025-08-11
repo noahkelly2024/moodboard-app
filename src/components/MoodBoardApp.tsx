@@ -1,9 +1,8 @@
 'use client';
 
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Upload, Download, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, Move, RotateCw, Type, AlignLeft, AlignCenter, AlignRight, FileText, Save, FolderOpen, FolderPlus } from 'lucide-react';
+import { Upload, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, RotateCw, Type, AlignLeft, AlignCenter, AlignRight, FileText, Save, FolderOpen, FolderPlus } from 'lucide-react';
 import { ImageType, SearchResult, SearchFilters, Slide, Layer, Project, ProjectData } from '@/types';
-import PptxGenJS from 'pptxgenjs';
 
 const MoodBoardApp = () => {
   const [images, setImages] = useState<ImageType[]>([]);
@@ -14,7 +13,6 @@ const MoodBoardApp = () => {
   const [slideInterval, setSlideInterval] = useState<number>(3000);
   const [viewMode, setViewMode] = useState<'grid' | 'slideshow' | 'preview'>('grid');
   const [compositionMode, setCompositionMode] = useState<boolean>(false);
-  const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false);
   const [selectedImages, setSelectedImages] = useState<Set<string | number>>(new Set());
   const [activeTab, setActiveTab] = useState<'moodboard' | 'search'>('moodboard');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -38,7 +36,7 @@ const MoodBoardApp = () => {
   const [aiAvailable, setAiAvailable] = useState<boolean>(false);
   // NEW: Constructor.io admin state
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
-  const [keyStatus, setKeyStatus] = useState<{ loading: boolean; data: any | null; error: string | null }>({ loading: false, data: null, error: null });
+  const [keyStatus, setKeyStatus] = useState<{ loading: boolean; data: Record<string, unknown> | null; error: string | null }>({ loading: false, data: null, error: null });
   const [isRefreshingKeys, setIsRefreshingKeys] = useState<boolean>(false);
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
@@ -339,177 +337,44 @@ const MoodBoardApp = () => {
     setIsExporting(true);
     
     try {
-      const pptx = new PptxGenJS();
-      
-      // Set presentation properties
-      pptx.author = 'Mood Board Creator';
-      pptx.company = 'Interior Design Tool';
-      pptx.subject = 'Mood Board Presentation';
-      pptx.title = 'Mood Board Collection';
-      
-      // Define slide dimensions (16:9 aspect ratio)
-      pptx.defineLayout({ name: 'LAYOUT_16x9', width: 10, height: 5.625 });
-      pptx.layout = 'LAYOUT_16x9';
-
-      if (compositionMode) {
-        // Export composition slides
-        for (let slideIndex = 0; slideIndex < slides.length; slideIndex++) {
-          const slide = slides[slideIndex];
-          const pptxSlide = pptx.addSlide();
-          
-          // Set slide background color
-          if (slide.backgroundColor) {
-            pptxSlide.background = { fill: slide.backgroundColor };
-          }
-          
-          // Add slide title
-          pptxSlide.addText(`Slide ${slideIndex + 1}`, {
-            x: 0.5,
-            y: 0.1,
-            w: 9,
-            h: 0.4,
-            fontSize: slideIndex === 0 ? 32 : 24,
-            fontFace: 'Arial',
-            color: slide.backgroundColor === '#1f2937' ? 'FFFFFF' : '000000',
-            bold: true,
-            align: 'center'
-          });
-          
-          // Sort layers by zIndex for proper layering
-          const sortedLayers = [...slide.layers].sort((a, b) => a.zIndex - b.zIndex);
-          
-          // Process each layer
-          for (const layer of sortedLayers) {
-            if (layer.type === 'text' && layer.text) {
-              // Add text layer
-              pptxSlide.addText(layer.text, {
-                x: layer.position.x / 100 * 10, // Convert percentage to inches
-                y: (layer.position.y / 100 * 5.625) + 0.5, // Offset for title
-                w: layer.size.width / 100 * 10,
-                h: layer.size.height / 100 * 5.625,
-                fontSize: layer.fontSize || 16,
-                fontFace: layer.fontFamily || 'Arial',
-                color: (layer.fontColor || '#000000').replace('#', ''),
-                align: layer.textAlign || 'left',
-                rotate: layer.rotation || 0,
-                transparency: Math.round((1 - (layer.opacity || 1)) * 100)
-              });
-            } else if (layer.type === 'image' && layer.imageId) {
-              // Find the corresponding image
-              const image = images.find(img => img.id === layer.imageId);
-              if (image) {
-                try {
-                  const imageUrl = image.useProcessed && image.processed ? image.processed : image.original;
-                  const base64Image = await imageUrlToBase64(imageUrl);
-                  
-                  // Add image layer
-                  pptxSlide.addImage({
-                    data: base64Image,
-                    x: layer.position.x / 100 * 10,
-                    y: (layer.position.y / 100 * 5.625) + 0.5, // Offset for title
-                    w: layer.size.width / 100 * 10,
-                    h: layer.size.height / 100 * 5.625,
-                    rotate: layer.rotation || 0,
-                    transparency: Math.round((1 - (layer.opacity || 1)) * 100)
-                  });
-                } catch (error) {
-                  console.warn('Failed to add image to slide:', error);
-                  // Add placeholder text for failed images
-                  pptxSlide.addText(`[Image: ${image.name}]`, {
-                    x: layer.position.x / 100 * 10,
-                    y: (layer.position.y / 100 * 5.625) + 0.5,
-                    w: layer.size.width / 100 * 10,
-                    h: layer.size.height / 100 * 5.625,
-                    fontSize: 12,
-                    fontFace: 'Arial',
-                    color: '666666',
-                    align: 'center',
-                    rotate: layer.rotation || 0,
-                    transparency: Math.round((1 - (layer.opacity || 1)) * 100)
-                  });
-                }
-              }
-            }
-          }
+      // For now, we'll export as JSON until we can resolve the pptxgenjs build issue
+      const exportData = {
+        metadata: {
+          name: 'Mood Board Collection',
+          createdAt: new Date().toISOString(),
+          version: '1.0.0'
+        },
+        images: images.map(img => ({
+          id: img.id,
+          name: img.name,
+          hasProcessed: !!img.processed,
+          useProcessed: img.useProcessed,
+          searchMetadata: img.searchMetadata
+        })),
+        slides: slides,
+        settings: {
+          currentSlide,
+          viewMode,
+          compositionMode,
+          slideInterval,
+          rembgModel
         }
-      } else {
-        // Export individual images as slides (gallery mode)
-        const pptxSlide = pptx.addSlide();
-        
-        // Add title slide
-        pptxSlide.background = { fill: '#1f2937' };
-        pptxSlide.addText('Mood Board Collection', {
-          x: 0.5,
-          y: 2,
-          w: 9,
-          h: 1.5,
-          fontSize: 48,
-          fontFace: 'Arial',
-          color: 'FFFFFF',
-          bold: true,
-          align: 'center'
-        });
-
-        // Calculate grid layout for images
-        const imagesPerSlide = 6; // 2x3 grid
-        const slideCount = Math.ceil(images.length / imagesPerSlide);
-        
-        for (let slideIndex = 0; slideIndex < slideCount; slideIndex++) {
-          const imageSlide = pptx.addSlide();
-          imageSlide.background = { fill: '#f8f9fa' };
-          
-          const startIndex = slideIndex * imagesPerSlide;
-          const endIndex = Math.min(startIndex + imagesPerSlide, images.length);
-          const slideImages = images.slice(startIndex, endIndex);
-          
-          // Grid layout: 2 columns, 3 rows
-          const cols = 2;
-          const rows = 3;
-          const imageWidth = 4;
-          const imageHeight = 1.5;
-          const startX = 1;
-          const startY = 0.5;
-          
-          for (let i = 0; i < slideImages.length; i++) {
-            const image = slideImages[i];
-            const col = i % cols;
-            const row = Math.floor(i / cols);
-            
-            try {
-              const imageUrl = image.useProcessed && image.processed ? image.processed : image.original;
-              const base64Image = await imageUrlToBase64(imageUrl);
-              
-              imageSlide.addImage({
-                data: base64Image,
-                x: startX + (col * (imageWidth + 0.5)),
-                y: startY + (row * (imageHeight + 0.5)),
-                w: imageWidth,
-                h: imageHeight
-              });
-              
-              // Add image name as caption
-              imageSlide.addText(image.name, {
-                x: startX + (col * (imageWidth + 0.5)),
-                y: startY + (row * (imageHeight + 0.5)) + imageHeight + 0.1,
-                w: imageWidth,
-                h: 0.3,
-                fontSize: 10,
-                fontFace: 'Arial',
-                color: '333333',
-                align: 'center'
-              });
-            } catch (error) {
-              console.warn('Failed to add image to gallery:', error);
-            }
-          }
-        }
-      }
+      };
       
-      // Generate and download the PowerPoint file
-      const fileName = `mood-board-${new Date().toISOString().split('T')[0]}.pptx`;
-      await pptx.writeFile({ fileName });
+      // Create and download JSON file
+      const jsonString = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
       
-      alert(`PowerPoint exported successfully as ${fileName}`);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `mood-board-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      alert('Mood board exported as JSON file. PowerPoint export will be available in a future update.');
       
     } catch (error) {
       console.error('Export failed:', error);
@@ -517,7 +382,7 @@ const MoodBoardApp = () => {
     } finally {
       setIsExporting(false);
     }
-  }, [slides, images, compositionMode, imageUrlToBase64]);
+  }, [slides, images, compositionMode, currentSlide, viewMode, slideInterval, rembgModel]);
 
   const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files; if (!files) return;
@@ -556,7 +421,7 @@ const MoodBoardApp = () => {
   const startSlideshow = useCallback(() => { setIsPlaying(true); }, []); const stopSlideshow = useCallback(() => { setIsPlaying(false); }, []);
 
   React.useEffect(() => { if (isPlaying && viewMode === 'preview') { intervalRef.current = setInterval(() => { setCurrentSlide((prev) => { const nextSlide = prev + 1; return nextSlide >= slides.length ? 0 : nextSlide; }); }, slideInterval); return () => { if (intervalRef.current) clearInterval(intervalRef.current); }; } else { if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; } } }, [isPlaying, slideInterval, slides.length, viewMode]);
-  React.useEffect(() => { const handleKeyDown = (e: KeyboardEvent) => { if (viewMode === 'preview') { switch (e.key) { case 'Escape': setViewMode('slideshow'); setIsPreviewMode(false); setIsPlaying(false); break; case 'ArrowLeft': e.preventDefault(); prevSlide(); break; case 'ArrowRight': e.preventDefault(); nextSlide(); break; case ' ': e.preventDefault(); isPlaying ? stopSlideshow() : startSlideshow(); break; } } }; document.addEventListener('keydown', handleKeyDown); return () => document.removeEventListener('keydown', handleKeyDown); }, [viewMode, isPlaying, prevSlide, nextSlide, startSlideshow, stopSlideshow]);
+  React.useEffect(() => { const handleKeyDown = (e: KeyboardEvent) => { if (viewMode === 'preview') { switch (e.key) { case 'Escape': setViewMode('slideshow'); setIsPlaying(false); break; case 'ArrowLeft': e.preventDefault(); prevSlide(); break; case 'ArrowRight': e.preventDefault(); nextSlide(); break; case ' ': e.preventDefault(); isPlaying ? stopSlideshow() : startSlideshow(); break; } } }; document.addEventListener('keydown', handleKeyDown); return () => document.removeEventListener('keydown', handleKeyDown); }, [viewMode, isPlaying, prevSlide, nextSlide, startSlideshow, stopSlideshow]);
 
   const handleLayerMouseMove = useCallback((e: MouseEvent) => { if (!isDraggingLayer || !compositionCanvasRef.current) return; if (dragRafRef.current) cancelAnimationFrame(dragRafRef.current); dragRafRef.current = requestAnimationFrame(() => { const rect = compositionCanvasRef.current!.getBoundingClientRect(); const layer = slides[currentSlide]?.layers.find(l => l.id === isDraggingLayer); if (!layer) return; const newLeftPx = e.clientX - rect.left - dragOffset.x; const newTopPx = e.clientY - rect.top - dragOffset.y; const xPctRaw = (newLeftPx / rect.width) * 100; const yPctRaw = (newTopPx / rect.height) * 100; // Allow positions outside [0,100] so elements can extend past slide edges
  const x = xPctRaw; const y = yPctRaw; updateLayerProperty(currentSlide, isDraggingLayer, 'position', { x, y }); }); }, [isDraggingLayer, dragOffset, currentSlide, slides, updateLayerProperty]);
@@ -1010,9 +875,9 @@ const MoodBoardApp = () => {
           {activeTab === 'moodboard' && (
             <div className="flex items-center justify-center pb-4 border-t border-gray-700/30 pt-4 space-x-4">
               <div className="flex bg-gray-700/50 backdrop-blur-sm rounded-lg p-1 border border-gray-600/30">
-                <button onClick={() => { setViewMode('grid'); setIsPreviewMode(false); }} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'grid' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Grid className="w-4 h-4" /> <span>Grid</span></button>
-                <button onClick={() => { setViewMode('slideshow'); setIsPreviewMode(false); }} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'slideshow' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Layers className="w-4 h-4" /> <span>Slideshow</span></button>
-                <button onClick={() => { setViewMode('preview'); setIsPreviewMode(true); }} disabled={slides.length === 0 || slides.every(s => s.layers.length === 0)} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'preview' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Play className="w-4 h-4" /> <span>Preview</span></button>
+                <button onClick={() => { setViewMode('grid'); }} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'grid' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Grid className="w-4 h-4" /> <span>Grid</span></button>
+                <button onClick={() => { setViewMode('slideshow'); }} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'slideshow' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Layers className="w-4 h-4" /> <span>Slideshow</span></button>
+                <button onClick={() => { setViewMode('preview'); }} disabled={slides.length === 0 || slides.every(s => s.layers.length === 0)} className={`flex items-center space-x-2 px-6 py-3 rounded-md text-sm font-medium transition-all ${viewMode === 'preview' ? 'gradient-primary text-white shadow-sm' : 'text-gray-300 hover:text-white hover:bg-gray-600/30'}`}> <Play className="w-4 h-4" /> <span>Preview</span></button>
               </div>
               <div className="flex items-center space-x-4">
                 {/* BG Removal selector replaced with fixed AI badge + status */}
@@ -1195,7 +1060,7 @@ const MoodBoardApp = () => {
                           <span className="text-white text-sm">{currentSlide + 1} / {slides.length}</span>
                         </div>
                       </div>
-                      <button onClick={() => { setViewMode('slideshow'); setIsPreviewMode(false); setIsPlaying(false); }} className="absolute top-4 right-4 z-10 p-2 bg-red-600 text-white rounded-full hover:bg-red-700" title="Exit Preview"> <X className="w-5 h-5" /></button>
+                      <button onClick={() => { setViewMode('slideshow'); setIsPlaying(false); }} className="absolute top-4 right-4 z-10 p-2 bg-red-600 text-white rounded-full hover:bg-red-700" title="Exit Preview"> <X className="w-5 h-5" /></button>
                       <div className="w-full h-full flex items-center justify-center pt-20 pb-8 px-4">
                         <div className="relative bg-gray-900 rounded-lg border-2 border-dashed border-gray-600 overflow-hidden" style={{ aspectRatio: '16/9', width: '98vw', maxWidth: '2000px', height: 'auto' }}>
                           {currentSlideData?.layers.map((layer) => {
