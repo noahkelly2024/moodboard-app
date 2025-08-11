@@ -337,27 +337,171 @@ const MoodBoardApp = () => {
     setIsExporting(true);
     
     try {
-      // For now, we'll export as JSON until we can resolve the pptxgenjs build issue
-      const exportData = {
-        metadata: {
-          name: 'Mood Board Collection',
-          createdAt: new Date().toISOString(),
-          version: '1.0.0'
-        },
-        images: images.map(img => ({
-          id: img.id,
-          name: img.name,
-          hasProcessed: !!img.processed,
-          useProcessed: img.useProcessed,
-          searchMetadata: img.searchMetadata
-        })),
-        slides: slides,
-        settings: {
-          currentSlide,
-          viewMode,
-          compositionMode,
-          slideInterval,
-          rembgModel
+      // Dynamically import PptxGenJS to avoid Node.js module issues during build
+      const PptxGenJS = (await import('pptxgenjs')).default;
+      const pptx = new PptxGenJS();
+      
+      // Set presentation properties
+      pptx.author = 'Mood Board Creator';
+      pptx.company = 'Interior Design Tool';
+      pptx.subject = 'Mood Board Presentation';
+      pptx.title = 'Mood Board Collection';
+      
+      // Define slide dimensions (16:9 aspect ratio)
+      pptx.defineLayout({ name: 'LAYOUT_16x9', width: 10, height: 5.625 });
+      pptx.layout = 'LAYOUT_16x9';
+
+      if (compositionMode) {
+        // Export composition slides
+        for (let slideIndex = 0; slideIndex < slides.length; slideIndex++) {
+          const slide = slides[slideIndex];
+          const pptxSlide = pptx.addSlide();
+          
+          // Set slide background color
+          if (slide.backgroundColor) {
+            pptxSlide.background = { fill: slide.backgroundColor };
+          }
+          
+          // Add slide title
+          pptxSlide.addText(`Slide ${slideIndex + 1}`, {
+            x: 0.5,
+            y: 0.1,
+            w: 9,
+            h: 0.4,
+            fontSize: slideIndex === 0 ? 32 : 24,
+            fontFace: 'Arial',
+            color: slide.backgroundColor === '#1f2937' ? 'FFFFFF' : '000000',
+            bold: true,
+            align: 'center'
+          });
+          
+          // Sort layers by zIndex for proper layering
+          const sortedLayers = [...slide.layers].sort((a, b) => a.zIndex - b.zIndex);
+          
+          // Process each layer
+          for (const layer of sortedLayers) {
+            if (layer.type === 'text' && layer.text) {
+              // Add text layer
+              pptxSlide.addText(layer.text, {
+                x: layer.position.x / 100 * 10, // Convert percentage to inches
+                y: (layer.position.y / 100 * 5.625) + 0.5, // Offset for title
+                w: layer.size.width / 100 * 10,
+                h: layer.size.height / 100 * 5.625,
+                fontSize: layer.fontSize || 16,
+                fontFace: layer.fontFamily || 'Arial',
+                color: (layer.fontColor || '#000000').replace('#', ''),
+                align: layer.textAlign || 'left',
+                rotate: layer.rotation || 0,
+                transparency: Math.round((1 - (layer.opacity || 1)) * 100)
+              });
+            } else if (layer.type === 'image' && layer.imageId) {
+              // Find the corresponding image
+              const image = images.find(img => img.id === layer.imageId);
+              if (image) {
+                try {
+                  const imageUrl = image.useProcessed && image.processed ? image.processed : image.original;
+                  const base64Image = await imageUrlToBase64(imageUrl);
+                  
+                  // Add image layer
+                  pptxSlide.addImage({
+                    data: base64Image,
+                    x: layer.position.x / 100 * 10,
+                    y: (layer.position.y / 100 * 5.625) + 0.5, // Offset for title
+                    w: layer.size.width / 100 * 10,
+                    h: layer.size.height / 100 * 5.625,
+                    rotate: layer.rotation || 0,
+                    transparency: Math.round((1 - (layer.opacity || 1)) * 100)
+                  });
+                } catch (error) {
+                  console.warn('Failed to add image to slide:', error);
+                  // Add placeholder text for failed images
+                  pptxSlide.addText(`[Image: ${image.name}]`, {
+                    x: layer.position.x / 100 * 10,
+                    y: (layer.position.y / 100 * 5.625) + 0.5,
+                    w: layer.size.width / 100 * 10,
+                    h: layer.size.height / 100 * 5.625,
+                    fontSize: 12,
+                    fontFace: 'Arial',
+                    color: '666666',
+                    align: 'center',
+                    rotate: layer.rotation || 0,
+                    transparency: Math.round((1 - (layer.opacity || 1)) * 100)
+                  });
+                }
+              }
+            }
+          }
+        }
+      } else {
+        // Export individual images as slides (gallery mode)
+        const pptxSlide = pptx.addSlide();
+        
+        // Add title slide
+        pptxSlide.background = { fill: '#1f2937' };
+        pptxSlide.addText('Mood Board Collection', {
+          x: 0.5,
+          y: 2,
+          w: 9,
+          h: 1.5,
+          fontSize: 48,
+          fontFace: 'Arial',
+          color: 'FFFFFF',
+          bold: true,
+          align: 'center'
+        });
+
+        // Calculate grid layout for images
+        const imagesPerSlide = 6; // 2x3 grid
+        const slideCount = Math.ceil(images.length / imagesPerSlide);
+        
+        for (let slideIndex = 0; slideIndex < slideCount; slideIndex++) {
+          const imageSlide = pptx.addSlide();
+          imageSlide.background = { fill: '#f8f9fa' };
+          
+          const startIndex = slideIndex * imagesPerSlide;
+          const endIndex = Math.min(startIndex + imagesPerSlide, images.length);
+          const slideImages = images.slice(startIndex, endIndex);
+          
+          // Grid layout: 2 columns, 3 rows
+          const cols = 2;
+          const rows = 3;
+          const imageWidth = 4;
+          const imageHeight = 1.5;
+          const startX = 1;
+          const startY = 0.5;
+          
+          for (let i = 0; i < slideImages.length; i++) {
+            const image = slideImages[i];
+            const col = i % cols;
+            const row = Math.floor(i / cols);
+            
+            try {
+              const imageUrl = image.useProcessed && image.processed ? image.processed : image.original;
+              const base64Image = await imageUrlToBase64(imageUrl);
+              
+              imageSlide.addImage({
+                data: base64Image,
+                x: startX + (col * (imageWidth + 0.5)),
+                y: startY + (row * (imageHeight + 0.5)),
+                w: imageWidth,
+                h: imageHeight
+              });
+              
+              // Add image name as caption
+              imageSlide.addText(image.name, {
+                x: startX + (col * (imageWidth + 0.5)),
+                y: startY + (row * (imageHeight + 0.5)) + imageHeight + 0.1,
+                w: imageWidth,
+                h: 0.3,
+                fontSize: 10,
+                fontFace: 'Arial',
+                color: '333333',
+                align: 'center'
+              });
+            } catch (error) {
+              console.warn('Failed to add image to gallery:', error);
+            }
+          }
         }
       };
       

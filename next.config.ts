@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  webpack: (config: any, { isServer }) => {
+  webpack: (config: any, { isServer, webpack }: { isServer: boolean, webpack: any }) => {
     // Add support for WASM files
     config.experiments = {
       ...config.experiments,
@@ -33,6 +33,50 @@ const nextConfig: NextConfig = {
         tls: false,
         child_process: false,
       };
+    }
+    
+    // Only apply Node.js polyfills on client-side
+    if (!isServer) {
+      // Fix for pptxgenjs Node.js modules in browser
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        path: false,
+        stream: false,
+        constants: false,
+        assert: false,
+        util: false,
+        buffer: false,
+        events: false,
+        https: false,
+        http: false,
+        url: false,
+        querystring: false,
+        crypto: false,
+        zlib: false,
+        os: false,
+        tty: false,
+        child_process: false,
+      };
+
+      // Add externals to ignore Node.js modules
+      config.externals = [
+        ...config.externals,
+        function({ request }: { request: string }, callback: any) {
+          // Ignore pptxgenjs on client side but allow it to be loaded via dynamic import
+          if (request === 'pptxgenjs') {
+            return callback(null, 'undefined');
+          }
+          callback();
+        },
+      ];
+      
+      // Add a plugin to ignore specific modules during build
+      config.plugins.push(
+        new webpack.IgnorePlugin({
+          resourceRegExp: /^pptxgenjs$/,
+        })
+      );
     }
     
     return config;
