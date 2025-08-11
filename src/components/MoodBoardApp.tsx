@@ -559,8 +559,8 @@ const MoodBoardApp = () => {
                         </div>
                       </div>
                       <button onClick={() => { setViewMode('slideshow'); setIsPreviewMode(false); setIsPlaying(false); }} className="absolute top-4 right-4 z-10 p-2 bg-red-600 text-white rounded-full hover:bg-red-700" title="Exit Preview"> <X className="w-5 h-5" /></button>
-                      <div className="w-full h-full flex items-center justify-center p-8">
-                        <div className="relative bg-gray-900 rounded-lg overflow-hidden" style={{ aspectRatio: '16/9', width: '98vw', maxWidth: '2000px', height: 'auto' }}>
+                      <div className="w-full h-full flex items-center justify-center pt-20 pb-8 px-4">
+                        <div className="relative bg-gray-900 rounded-lg border-2 border-dashed border-gray-600 overflow-hidden" style={{ aspectRatio: '16/9', width: '98vw', maxWidth: '2000px', height: 'auto' }}>
                           {currentSlideData?.layers.map((layer) => {
                             if (layer.type === 'text') {
                               return (
