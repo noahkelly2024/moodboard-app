@@ -3,7 +3,6 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Upload, Download, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, Move, RotateCw, Type, AlignLeft, AlignCenter, AlignRight, FileText, Save, FolderOpen, FolderPlus } from 'lucide-react';
 import { ImageType, SearchResult, SearchFilters, Slide, Layer, Project, ProjectData } from '@/types';
-import PptxGenJS from 'pptxgenjs';
 
 const MoodBoardApp = () => {
   const [images, setImages] = useState<ImageType[]>([]);
@@ -339,6 +338,8 @@ const MoodBoardApp = () => {
     setIsExporting(true);
     
     try {
+      // Dynamically import PptxGenJS to avoid Node.js module issues during build
+      const PptxGenJS = (await import('pptxgenjs')).default;
       const pptx = new PptxGenJS();
       
       // Set presentation properties
