@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useState, useRef, useCallback } from 'react';
-import { Upload, Download, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, Move, RotateCw, Type, AlignLeft, AlignCenter, AlignRight } from 'lucide-react';
+import { Upload, Download, Play, Pause, SkipBack, SkipForward, Trash2, RotateCcw, Grid, Search, ExternalLink, Plus, Filter, X, Heart, ChevronUp, ChevronDown, Layers, Move, RotateCw, Type, AlignLeft, AlignCenter, AlignRight, FileText } from 'lucide-react';
 import { ImageType, SearchResult, SearchFilters, Slide, Layer } from '@/types';
+import PptxGenJS from 'pptxgenjs';
 
 const MoodBoardApp = () => {
   const [images, setImages] = useState<ImageType[]>([]);
@@ -39,6 +40,7 @@ const MoodBoardApp = () => {
   const [showAdmin, setShowAdmin] = useState<boolean>(false);
   const [keyStatus, setKeyStatus] = useState<{ loading: boolean; data: any | null; error: string | null }>({ loading: false, data: null, error: null });
   const [isRefreshingKeys, setIsRefreshingKeys] = useState<boolean>(false);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   // removed unused canvasRef
@@ -286,7 +288,226 @@ const MoodBoardApp = () => {
 
   const batchBackgroundRemoval = useCallback(async () => { const selectedImageArray = images.filter(img => selectedImages.has(img.id)); if (selectedImageArray.length === 0) return; setBatchProgress({ current: 0, total: selectedImageArray.length }); selectedImageArray.forEach(img => { setProcessingImages(prev => new Set(prev).add(img.id)); }); try { for (let index = 0; index < selectedImageArray.length; index++) { const image = selectedImageArray[index]; setBatchProgress({ current: index + 1, total: selectedImageArray.length }); try { const processedUrl = await removeBackgroundWithRembgAPI(image.original, rembgModel); if (processedUrl) { setImages(prev => prev.map(img => img.id === image.id ? { ...img, processed: processedUrl, useProcessed: true } : img)); } } catch {} finally { setProcessingImages(prev => { const newSet = new Set(prev); newSet.delete(image.id); return newSet; }); } } } catch {} finally { setBatchProgress(null); } }, [images, selectedImages, removeBackgroundWithRembgAPI, rembgModel]);
 
-  const exportMoodBoard = useCallback(() => { console.log('Export not yet implemented'); }, []);
+  // Helper function to convert image URL to base64
+  const imageUrlToBase64 = useCallback(async (url: string): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Could not get canvas context'));
+          return;
+        }
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        try {
+          const dataURL = canvas.toDataURL('image/png');
+          resolve(dataURL);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = url;
+    });
+  }, []);
+
+  const exportMoodBoard = useCallback(async () => {
+    // Check if there's content to export
+    if (compositionMode && slides.length === 0) {
+      alert('No slides to export. Create some slides first.');
+      return;
+    }
+    if (!compositionMode && images.length === 0) {
+      alert('No images to export. Upload some images first.');
+      return;
+    }
+    
+    setIsExporting(true);
+    
+    try {
+      const pptx = new PptxGenJS();
+      
+      // Set presentation properties
+      pptx.author = 'Mood Board Creator';
+      pptx.company = 'Interior Design Tool';
+      pptx.subject = 'Mood Board Presentation';
+      pptx.title = 'Mood Board Collection';
+      
+      // Define slide dimensions (16:9 aspect ratio)
+      pptx.defineLayout({ name: 'LAYOUT_16x9', width: 10, height: 5.625 });
+      pptx.layout = 'LAYOUT_16x9';
+
+      if (compositionMode) {
+        // Export composition slides
+        for (let slideIndex = 0; slideIndex < slides.length; slideIndex++) {
+          const slide = slides[slideIndex];
+          const pptxSlide = pptx.addSlide();
+          
+          // Set slide background color
+          if (slide.backgroundColor) {
+            pptxSlide.background = { fill: slide.backgroundColor };
+          }
+          
+          // Add slide title
+          pptxSlide.addText(`Slide ${slideIndex + 1}`, {
+            x: 0.5,
+            y: 0.1,
+            w: 9,
+            h: 0.4,
+            fontSize: slideIndex === 0 ? 32 : 24,
+            fontFace: 'Arial',
+            color: slide.backgroundColor === '#1f2937' ? 'FFFFFF' : '000000',
+            bold: true,
+            align: 'center'
+          });
+          
+          // Sort layers by zIndex for proper layering
+          const sortedLayers = [...slide.layers].sort((a, b) => a.zIndex - b.zIndex);
+          
+          // Process each layer
+          for (const layer of sortedLayers) {
+            if (layer.type === 'text' && layer.text) {
+              // Add text layer
+              pptxSlide.addText(layer.text, {
+                x: layer.position.x / 100 * 10, // Convert percentage to inches
+                y: (layer.position.y / 100 * 5.625) + 0.5, // Offset for title
+                w: layer.size.width / 100 * 10,
+                h: layer.size.height / 100 * 5.625,
+                fontSize: layer.fontSize || 16,
+                fontFace: layer.fontFamily || 'Arial',
+                color: (layer.fontColor || '#000000').replace('#', ''),
+                align: layer.textAlign || 'left',
+                rotate: layer.rotation || 0,
+                transparency: Math.round((1 - (layer.opacity || 1)) * 100)
+              });
+            } else if (layer.type === 'image' && layer.imageId) {
+              // Find the corresponding image
+              const image = images.find(img => img.id === layer.imageId);
+              if (image) {
+                try {
+                  const imageUrl = image.useProcessed && image.processed ? image.processed : image.original;
+                  const base64Image = await imageUrlToBase64(imageUrl);
+                  
+                  // Add image layer
+                  pptxSlide.addImage({
+                    data: base64Image,
+                    x: layer.position.x / 100 * 10,
+                    y: (layer.position.y / 100 * 5.625) + 0.5, // Offset for title
+                    w: layer.size.width / 100 * 10,
+                    h: layer.size.height / 100 * 5.625,
+                    rotate: layer.rotation || 0,
+                    transparency: Math.round((1 - (layer.opacity || 1)) * 100)
+                  });
+                } catch (error) {
+                  console.warn('Failed to add image to slide:', error);
+                  // Add placeholder text for failed images
+                  pptxSlide.addText(`[Image: ${image.name}]`, {
+                    x: layer.position.x / 100 * 10,
+                    y: (layer.position.y / 100 * 5.625) + 0.5,
+                    w: layer.size.width / 100 * 10,
+                    h: layer.size.height / 100 * 5.625,
+                    fontSize: 12,
+                    fontFace: 'Arial',
+                    color: '666666',
+                    align: 'center',
+                    rotate: layer.rotation || 0,
+                    transparency: Math.round((1 - (layer.opacity || 1)) * 100)
+                  });
+                }
+              }
+            }
+          }
+        }
+      } else {
+        // Export individual images as slides (gallery mode)
+        const pptxSlide = pptx.addSlide();
+        
+        // Add title slide
+        pptxSlide.background = { fill: '#1f2937' };
+        pptxSlide.addText('Mood Board Collection', {
+          x: 0.5,
+          y: 2,
+          w: 9,
+          h: 1.5,
+          fontSize: 48,
+          fontFace: 'Arial',
+          color: 'FFFFFF',
+          bold: true,
+          align: 'center'
+        });
+
+        // Calculate grid layout for images
+        const imagesPerSlide = 6; // 2x3 grid
+        const slideCount = Math.ceil(images.length / imagesPerSlide);
+        
+        for (let slideIndex = 0; slideIndex < slideCount; slideIndex++) {
+          const imageSlide = pptx.addSlide();
+          imageSlide.background = { fill: '#f8f9fa' };
+          
+          const startIndex = slideIndex * imagesPerSlide;
+          const endIndex = Math.min(startIndex + imagesPerSlide, images.length);
+          const slideImages = images.slice(startIndex, endIndex);
+          
+          // Grid layout: 2 columns, 3 rows
+          const cols = 2;
+          const rows = 3;
+          const imageWidth = 4;
+          const imageHeight = 1.5;
+          const startX = 1;
+          const startY = 0.5;
+          
+          for (let i = 0; i < slideImages.length; i++) {
+            const image = slideImages[i];
+            const col = i % cols;
+            const row = Math.floor(i / cols);
+            
+            try {
+              const imageUrl = image.useProcessed && image.processed ? image.processed : image.original;
+              const base64Image = await imageUrlToBase64(imageUrl);
+              
+              imageSlide.addImage({
+                data: base64Image,
+                x: startX + (col * (imageWidth + 0.5)),
+                y: startY + (row * (imageHeight + 0.5)),
+                w: imageWidth,
+                h: imageHeight
+              });
+              
+              // Add image name as caption
+              imageSlide.addText(image.name, {
+                x: startX + (col * (imageWidth + 0.5)),
+                y: startY + (row * (imageHeight + 0.5)) + imageHeight + 0.1,
+                w: imageWidth,
+                h: 0.3,
+                fontSize: 10,
+                fontFace: 'Arial',
+                color: '333333',
+                align: 'center'
+              });
+            } catch (error) {
+              console.warn('Failed to add image to gallery:', error);
+            }
+          }
+        }
+      }
+      
+      // Generate and download the PowerPoint file
+      const fileName = `mood-board-${new Date().toISOString().split('T')[0]}.pptx`;
+      await pptx.writeFile({ fileName });
+      
+      alert(`PowerPoint exported successfully as ${fileName}`);
+      
+    } catch (error) {
+      console.error('Export failed:', error);
+      alert('Export failed. Please try again.');
+    } finally {
+      setIsExporting(false);
+    }
+  }, [slides, images, compositionMode, imageUrlToBase64]);
 
   const handleFileUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files; if (!files) return;
@@ -405,7 +626,16 @@ const MoodBoardApp = () => {
                   {selectedImages.size > 0 && (
                     <button onClick={batchBackgroundRemoval} disabled={Array.from(selectedImages).some(id => processingImages.has(id))} className="btn-gradient text-sm px-3 py-1 disabled:opacity-50 disabled:cursor-not-allowed"> <Filter className="w-4 h-4" /> <span className="ml-1">Remove BG ({selectedImages.size})</span></button>
                   )}
-                  <button onClick={exportMoodBoard} disabled={compositionMode ? slides.length === 0 : images.length === 0} className="btn-gradient text-sm px-3 py-1 disabled:opacity-50 disabled:cursor-not-allowed"> <Download className="w-4 h-4" /> <span className="ml-1">Export</span></button>
+                  <button 
+                    onClick={exportMoodBoard} 
+                    disabled={isExporting || (compositionMode ? slides.length === 0 : images.length === 0)} 
+                    className="btn-gradient text-sm px-3 py-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                  > 
+                    <FileText className={`w-4 h-4 ${isExporting ? 'animate-pulse' : ''}`} /> 
+                    <span className="ml-1">
+                      {isExporting ? 'Creating PPT...' : 'Export PPT'}
+                    </span>
+                  </button>
                   <button onClick={() => fileInputRef.current?.click()} className="btn-gradient text-sm px-3 py-1"> <Upload className="w-4 h-4" /> <span className="ml-1">Upload</span></button>
                 </div>
               </div>
