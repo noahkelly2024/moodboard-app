@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const { createServer } = require('http');
 const next = require('next');
 const net = require('net');
+const { setupPythonEnvironment } = require('./python-setup');
 
 const isDev = process.env.NODE_ENV === 'development';
 const skipPython = process.argv.includes('--no-python');
@@ -14,14 +15,13 @@ let nextApp;
 let server;
 let pythonProcess;
 
-const isMac = process.platform === 'darwin';
-
 // Find an available port
 const findAvailablePort = (startPort) => {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.listen(startPort, (err) => {
       if (err) {
+        // Port is in use, try the next one
         server.close();
         findAvailablePort(startPort + 1).then(resolve).catch(reject);
       } else {
@@ -33,6 +33,7 @@ const findAvailablePort = (startPort) => {
     
     server.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
+        // Port is in use, try the next one
         findAvailablePort(startPort + 1).then(resolve).catch(reject);
       } else {
         reject(err);
@@ -51,7 +52,7 @@ const prepareNext = () => {
     nextApp = next({ 
       dev: false, 
       dir: nextDir,
-      quiet: false
+      quiet: false // Enable logging
     });
     
     console.log('Preparing Next.js app...');
@@ -76,6 +77,7 @@ const prepareNext = () => {
           console.error('Server error:', err);
           reject(err);
         });
+        
       })
       .catch((err) => {
         console.error('Next.js prepare error:', err);
@@ -84,7 +86,7 @@ const prepareNext = () => {
   });
 };
 
-// Start Python backend - use PyInstaller executable if available
+// Start Python backend
 const startPythonBackend = () => {
   return new Promise((resolve) => {
     if (skipPython) {
@@ -95,84 +97,42 @@ const startPythonBackend = () => {
 
     const fs = require('fs');
     let pythonBackendPath;
+    
+    // Check if we're in a packaged app
     const isPackaged = app.isPackaged;
     console.log('App packaged:', isPackaged);
-
+    
     if (isPackaged) {
       pythonBackendPath = path.join(process.resourcesPath, 'python-backend');
     } else {
       pythonBackendPath = path.join(__dirname, '..', 'python-backend');
     }
+    
     console.log('Python backend path:', pythonBackendPath);
-
-    // Prefer PyInstaller executable if present
-    let executablePath = path.join(pythonBackendPath, 'dist', 'app');
-    if (isMac && fs.existsSync(executablePath)) {
-      console.log('Found PyInstaller executable:', executablePath);
-      try {
-        pythonProcess = spawn(executablePath, [], {
-          cwd: pythonBackendPath,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: {
-            ...process.env,
-            PYTHONPATH: pythonBackendPath,
-            PYTHONUNBUFFERED: '1'
-          }
-        });
-        let backendStarted = false;
-        pythonProcess.stdout.on('data', (data) => {
-          console.log(`Python Backend: ${data}`);
-          if (data.toString().includes('Running on') && !backendStarted) {
-            backendStarted = true;
-            resolve();
-          }
-        });
-        pythonProcess.stderr.on('data', (data) => {
-          console.error(`Python Backend Error: ${data}`);
-        });
-        pythonProcess.on('close', (code) => {
-          console.log(`Python backend exited with code ${code}`);
-        });
-        pythonProcess.on('error', (error) => {
-          console.error('Failed to start Python backend:', error);
-          if (!backendStarted) {
-            backendStarted = true;
-            resolve();
-          }
-        });
-        setTimeout(() => {
-          if (!backendStarted) {
-            console.log('Python backend timeout - continuing anyway...');
-            backendStarted = true;
-            resolve();
-          }
-        }, 10000);
-        return;
-      } catch (error) {
-        console.error('Failed to start PyInstaller backend:', error);
-        resolve();
-        return;
-      }
+    
+    // Check if python-backend directory exists
+    if (!fs.existsSync(pythonBackendPath)) {
+      console.log('Python backend directory not found, continuing without it...');
+      resolve();
+      return;
     }
-
-    // Fallback: run app.py with Python
+    
     const appScript = path.join(pythonBackendPath, 'app.py');
+    
+    // Check if app.py exists
     if (!fs.existsSync(appScript)) {
       console.log('app.py not found, continuing without Python backend...');
       resolve();
       return;
     }
-
-    // Mac: always use system Python, check for existence
-    let pythonExecutable = 'python3';
-    if (isMac) {
-      const macPythonPaths = ['/usr/bin/python3', '/usr/local/bin/python3', 'python3'];
-      pythonExecutable = macPythonPaths.find(p => p.startsWith('/') ? fs.existsSync(p) : true) || 'python3';
-    } else {
-      // Other platforms: try venv first, then system Python
-      const pythonPaths = [
-        path.join(pythonBackendPath, 'venv', 'bin', 'python'),
-        path.join(pythonBackendPath, 'venv', 'bin', 'python3'),
+    
+    // NEVER use shell scripts - only direct Python execution
+    let pythonExecutable = null;
+    let pythonPaths = [];
+    
+    if (isPackaged) {
+      // In packaged app, try system Python only
+      pythonPaths = [
         'python3',
         'python',
         '/usr/bin/python3',
@@ -180,86 +140,104 @@ const startPythonBackend = () => {
         '/usr/local/bin/python3',
         '/usr/local/bin/python'
       ];
-      pythonExecutable = pythonPaths.find(p => p.startsWith('/') ? fs.existsSync(p) : true) || 'python3';
+    } else {
+      // In development, try virtual environment first, then system Python
+      pythonPaths = [
+        path.join(pythonBackendPath, 'venv', 'bin', 'python'),
+        path.join(pythonBackendPath, 'venv', 'bin', 'python3'),
+        'python3',
+        'python'
+      ];
     }
-    console.log('Using Python executable:', pythonExecutable);
-
-    // Check if Python is available (sync test)
-    try {
-      const spawnSync = require('child_process').spawnSync;
-      const pyTest = spawnSync(pythonExecutable, ['--version']);
-      if (pyTest.error) {
-        throw pyTest.error;
+    
+    // Find the first working Python executable
+    for (const pythonPath of pythonPaths) {
+      if (pythonPath.startsWith('/') && fs.existsSync(pythonPath)) {
+        pythonExecutable = pythonPath;
+        break;
+      } else if (!pythonPath.startsWith('/')) {
+        pythonExecutable = pythonPath;
+        break;
       }
-    } catch (err) {
-      console.error('Python not found on this system. Please install Python 3.');
+    }
+    
+    if (!pythonExecutable) {
+      console.log('No Python executable found, continuing without Python backend...');
       resolve();
       return;
     }
-
-    // Check if dependencies are installed (try importing flask)
+    
+    console.log('Python executable:', pythonExecutable);
+    console.log('App script:', appScript);
+    console.log('Starting Python backend directly (no shell scripts)...');
+    
     try {
-      const spawnSync = require('child_process').spawnSync;
-      const depTest = spawnSync(pythonExecutable, ['-c', 'import flask'], {cwd: pythonBackendPath});
-      if (depTest.status !== 0) {
-        console.error('Required Python dependencies not found. Please run:');
-        console.error(`  ${pythonExecutable} -m pip install -r requirements.txt`);
-        resolve();
-        return;
-      }
-    } catch (err) {
-      console.error('Error checking Python dependencies:', err);
-      resolve();
-      return;
-    }
-
-    // Start backend
-    try {
+      // Set up environment for Python process
+      const pythonEnv = {
+        ...process.env,
+        PYTHONPATH: pythonBackendPath,
+        PYTHONUNBUFFERED: '1',
+        // Add any environment variables from .env file if needed
+        SERPAPI_KEY: process.env.SERPAPI_KEY || ''
+      };
+      
       pythonProcess = spawn(pythonExecutable, [appScript], {
         cwd: pythonBackendPath,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          PYTHONPATH: pythonBackendPath,
-          PYTHONUNBUFFERED: '1'
-        }
+        env: pythonEnv
       });
-      let backendStarted = false;
-      pythonProcess.stdout.on('data', (data) => {
-        console.log(`Python Backend: ${data}`);
-        if (data.toString().includes('Running on') && !backendStarted) {
-          backendStarted = true;
-          resolve();
-        }
-      });
-      pythonProcess.stderr.on('data', (data) => {
-        console.error(`Python Backend Error: ${data}`);
-      });
-      pythonProcess.on('close', (code) => {
-        console.log(`Python backend exited with code ${code}`);
-      });
-      pythonProcess.on('error', (error) => {
-        console.error('Failed to start Python backend:', error);
-        if (!backendStarted) {
-          backendStarted = true;
-          resolve();
-        }
-      });
-      setTimeout(() => {
-        if (!backendStarted) {
-          console.log('Python backend timeout - continuing anyway...');
-          backendStarted = true;
-          resolve();
-        }
-      }, 10000);
+      
+      setupPythonProcessHandlers(resolve);
+      
     } catch (error) {
       console.error('Failed to start Python backend:', error);
+      console.log('Continuing without Python backend...');
       resolve();
+      return;
     }
   });
 };
 
+const setupPythonProcessHandlers = (resolve) => {
+  let backendStarted = false;
+  
+  pythonProcess.stdout.on('data', (data) => {
+    console.log(`Python Backend: ${data}`);
+    if ((data.toString().includes('Running on') || data.toString().includes('Server listening')) && !backendStarted) {
+      backendStarted = true;
+      resolve();
+    }
+  });
+  
+  pythonProcess.stderr.on('data', (data) => {
+    console.error(`Python Backend Error: ${data}`);
+  });
+  
+  pythonProcess.on('close', (code) => {
+    console.log(`Python backend exited with code ${code}`);
+  });
+  
+  pythonProcess.on('error', (error) => {
+    console.error('Failed to start Python backend:', error);
+    if (!backendStarted) {
+      console.log('Continuing without Python backend...');
+      backendStarted = true;
+      resolve();
+    }
+  });
+  
+  // Fallback timeout - resolve anyway after 10 seconds
+  setTimeout(() => {
+    if (!backendStarted) {
+      console.log('Python backend timeout - continuing anyway...');
+      backendStarted = true;
+      resolve();
+    }
+  }, 10000);
+};
+
 const createWindow = () => {
+  // Create the browser window
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -276,13 +254,16 @@ const createWindow = () => {
     show: false
   });
 
+  // Load the Next.js app
   mainWindow.loadURL(`http://localhost:${port}`);
 
+  // Open external links in default browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
 
+  // Show window when ready
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     
@@ -291,12 +272,13 @@ const createWindow = () => {
     }
   });
 
+  // Handle window closed
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 };
 
-// App startup
+// App event listeners
 app.whenReady().then(async () => {
   try {
     console.log('Starting Mood Board App...');
@@ -304,9 +286,11 @@ app.whenReady().then(async () => {
     console.log('Resources path:', process.resourcesPath);
     console.log('Current directory:', __dirname);
     
+    // Find an available port
     port = await findAvailablePort(port);
     console.log('Using port:', port);
     
+    // Start Python backend first (but don't fail if it doesn't start)
     if (!skipPython) {
       try {
         await startPythonBackend();
@@ -318,19 +302,23 @@ app.whenReady().then(async () => {
       console.log('Skipping Python backend startup (--no-python flag)');
     }
     
+    // Start Next.js server
     try {
       await prepareNext();
       console.log('Next.js server started successfully');
     } catch (error) {
       console.error('Next.js server failed to start:', error);
+      // If Next.js fails, we can't continue
       throw error;
     }
     
+    // Create window
     createWindow();
     console.log('Application started successfully');
     
   } catch (error) {
     console.error('Failed to start application:', error);
+    // Show more specific error information
     const { dialog } = require('electron');
     let errorMessage = `Failed to start the application:\n\n${error.message}`;
     
@@ -346,14 +334,17 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  // Kill Python process
   if (pythonProcess) {
     pythonProcess.kill();
   }
   
+  // Close server
   if (server) {
     server.close();
   }
   
+  // Quit app
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -365,6 +356,7 @@ app.on('activate', () => {
   }
 });
 
+// Security: Prevent new window creation
 app.on('web-contents-created', (event, contents) => {
   contents.on('new-window', (navigationEvent, navigationURL) => {
     navigationEvent.preventDefault();
@@ -372,6 +364,7 @@ app.on('web-contents-created', (event, contents) => {
   });
 });
 
+// Handle app termination
 process.on('SIGINT', () => {
   if (pythonProcess) {
     pythonProcess.kill();
