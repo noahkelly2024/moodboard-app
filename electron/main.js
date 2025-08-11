@@ -95,11 +95,18 @@ const startPythonBackend = () => {
     }
 
     const fs = require('fs');
-    const pythonBackendPath = path.join(__dirname, '..', 'python-backend');
+    let pythonBackendPath;
     
     // Check if we're in a packaged app
     const isPackaged = app.isPackaged;
     console.log('App packaged:', isPackaged);
+    
+    if (isPackaged) {
+      pythonBackendPath = path.join(process.resourcesPath, 'python-backend');
+    } else {
+      pythonBackendPath = path.join(__dirname, '..', 'python-backend');
+    }
+    
     console.log('Python backend path:', pythonBackendPath);
     
     // Check if python-backend directory exists
@@ -109,99 +116,103 @@ const startPythonBackend = () => {
       return;
     }
     
-    // Check for startup script first
-    const startupScript = path.join(pythonBackendPath, 'start_backend.sh');
+    const appScript = path.join(pythonBackendPath, 'app.py');
     
-    if (fs.existsSync(startupScript)) {
-      console.log('Using startup script:', startupScript);
-      try {
-        pythonProcess = spawn('bash', [startupScript], {
-          cwd: pythonBackendPath,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: {
-            ...process.env,
-            PYTHONPATH: pythonBackendPath,
-            PYTHONUNBUFFERED: '1'
-          }
-        });
-        
-        setupPythonProcessHandlers(resolve);
-        
-      } catch (error) {
-        console.error('Failed to start with bash script:', error);
-        console.log('Continuing without Python backend...');
-        resolve();
-        return;
-      }
+    // Check if app.py exists
+    if (!fs.existsSync(appScript)) {
+      console.log('app.py not found, continuing without Python backend...');
+      resolve();
+      return;
+    }
+    
+    // Try to find Python executable
+    let pythonExecutable = null;
+    let pythonPaths = [];
+    
+    if (isPackaged) {
+      // In packaged app, try system Python first
+      pythonPaths = [
+        'python3',
+        'python',
+        '/usr/bin/python3',
+        '/usr/bin/python',
+        '/usr/local/bin/python3',
+        '/usr/local/bin/python'
+      ];
     } else {
-      // Fallback to direct Python execution
-      const appScript = path.join(pythonBackendPath, 'app.py');
+      // In development, try virtual environment first, then system Python
+      const startupScript = path.join(pythonBackendPath, 'start_backend.sh');
       
-      if (!fs.existsSync(appScript)) {
-        console.log('app.py not found, continuing without Python backend...');
-        resolve();
-        return;
-      }
-      
-      let pythonExecutable = null;
-      let pythonPaths = [];
-      
-      if (isPackaged) {
-        pythonPaths = [
-          path.join(process.resourcesPath, 'python-backend', 'venv', 'bin', 'python'),
-          path.join(process.resourcesPath, 'python-backend', 'venv', 'bin', 'python3'),
-          'python3',
-          'python'
-        ];
-      } else {
-        pythonPaths = [
-          path.join(pythonBackendPath, 'venv', 'bin', 'python'),
-          path.join(pythonBackendPath, 'venv', 'bin', 'python3'),
-          'python3',
-          'python'
-        ];
-      }
-      
-      // Find the first existing Python executable
-      for (const pythonPath of pythonPaths) {
-        if (pythonPath.startsWith('/') && fs.existsSync(pythonPath)) {
-          pythonExecutable = pythonPath;
-          break;
-        } else if (!pythonPath.startsWith('/')) {
-          pythonExecutable = pythonPath;
-          break;
+      // If we're in development and startup script exists, use it
+      if (fs.existsSync(startupScript)) {
+        console.log('Using startup script in development:', startupScript);
+        try {
+          pythonProcess = spawn('bash', [startupScript], {
+            cwd: pythonBackendPath,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: {
+              ...process.env,
+              PYTHONPATH: pythonBackendPath,
+              PYTHONUNBUFFERED: '1'
+            }
+          });
+          
+          setupPythonProcessHandlers(resolve);
+          return;
+          
+        } catch (error) {
+          console.error('Failed to start with bash script:', error);
+          // Fall through to direct Python execution
         }
       }
       
-      if (!pythonExecutable) {
-        console.log('No Python executable found, continuing without Python backend...');
-        resolve();
-        return;
+      pythonPaths = [
+        path.join(pythonBackendPath, 'venv', 'bin', 'python'),
+        path.join(pythonBackendPath, 'venv', 'bin', 'python3'),
+        'python3',
+        'python'
+      ];
+    }
+    
+    // Find the first working Python executable
+    for (const pythonPath of pythonPaths) {
+      if (pythonPath.startsWith('/') && fs.existsSync(pythonPath)) {
+        pythonExecutable = pythonPath;
+        break;
+      } else if (!pythonPath.startsWith('/')) {
+        pythonExecutable = pythonPath;
+        break;
       }
+    }
+    
+    if (!pythonExecutable) {
+      console.log('No Python executable found, continuing without Python backend...');
+      resolve();
+      return;
+    }
+    
+    console.log('Python executable:', pythonExecutable);
+    console.log('App script:', appScript);
+    console.log('Starting Python backend...');
+    
+    try {
+      pythonProcess = spawn(pythonExecutable, [appScript], {
+        cwd: pythonBackendPath,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          PYTHONPATH: pythonBackendPath,
+          PYTHONUNBUFFERED: '1'
+        }
+      });
       
-      console.log('Python executable:', pythonExecutable);
-      console.log('App script:', appScript);
-      console.log('Starting Python backend...');
+      setupPythonProcessHandlers(resolve);
       
-      try {
-        pythonProcess = spawn(pythonExecutable, [appScript], {
-          cwd: pythonBackendPath,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: {
-            ...process.env,
-            PYTHONPATH: pythonBackendPath,
-            PYTHONUNBUFFERED: '1'
-          }
-        });
-        
-        setupPythonProcessHandlers(resolve);
-        
-      } catch (error) {
-        console.error('Failed to start Python backend:', error);
-        console.log('Continuing without Python backend...');
-        resolve();
-        return;
-      }
+    } catch (error) {
+      console.error('Failed to start Python backend:', error);
+      console.log('Continuing without Python backend...');
+      resolve();
+      return;
     }
   });
 };
